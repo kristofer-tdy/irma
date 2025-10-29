@@ -7,9 +7,10 @@ This document outlines the architecture and implementation strategy for integrat
 ## Table of Contents
 
 1. [Overall Interaction Architecture](#1-overall-interaction-architecture)
-2. [Endpoint Implementation Details](#2-endpoint-implementation-details)
-3. [Threading, State Management, and Security](#3-threading-state-management-and-security)
-4. [Example Chat Workflow](#4-example-chat-workflow)
+2. [Streaming Architecture](#2-streaming-architecture)
+3. [Endpoint Implementation Details](#3-endpoint-implementation-details)
+4. [Threading, State Management, and Security](#4-threading-state-management-and-security)
+5. [Example Chat Workflow](#5-example-chat-workflow)
 
 ---
 
@@ -56,7 +57,152 @@ graph TD
 
 ---
 
-## 2. Endpoint Implementation Details
+## 2. Streaming Architecture
+
+Both the synchronous and streaming endpoints interact with the same Azure AI Foundry agent, but in different modes. Understanding how streaming works end-to-end is crucial for implementing a responsive user experience.
+
+### Agent Streaming Support
+
+Azure AI Foundry agents support **both synchronous and streaming response modes**:
+
+- **Synchronous Mode** (used by `/chat`): The agent processes the complete response before returning it as a single payload.
+- **Streaming Mode** (used by `/chatOverStream`): The agent generates response chunks progressively and sends them as they become available.
+
+**Key Point**: Both endpoints call the same agent API, but with a different `stream` parameter:
+
+```csharp
+// Synchronous call (for /chat endpoint)
+var response = await agentClient.GetResponseAsync(
+    threadId: foundryThreadId,
+    message: userMessage,
+    metadata: new { product = "Ixx/1.0" },
+    stream: false  // Wait for complete response
+);
+
+// Streaming call (for /chatOverStream endpoint)
+var responseStream = await agentClient.GetResponseAsync(
+    threadId: foundryThreadId,
+    message: userMessage,
+    metadata: new { product = "Ixx/1.0" },
+    stream: true  // Receive chunks progressively
+);
+```
+
+### End-to-End Streaming Pipeline
+
+When a client calls `/chatOverStream`, the data flows through a real-time pipeline:
+
+```
+AI Foundry Agent → (chunk 1) → .NET API → (SSE event 1) → Android Client
+                 → (chunk 2) → .NET API → (SSE event 2) → Android Client
+                 → (chunk 3) → .NET API → (SSE event 3) → Android Client
+                 → (complete) → .NET API → (end event)  → Android Client
+```
+
+**No Buffering**: The .NET API layer acts as a **streaming proxy**. Each chunk from the AI Foundry agent is immediately wrapped in an SSE event and forwarded to the client. The API does not wait for the complete response.
+
+### Benefits of Streaming
+
+1. **Lower Perceived Latency**: Users see the first words of the response in 1-2 seconds instead of waiting 10+ seconds for a complete answer.
+2. **Progressive Rendering**: The client can display text as it arrives, creating a more engaging "typing" effect.
+3. **Better Resource Utilization**: No need to buffer large responses in memory at the API layer.
+4. **Natural Backpressure**: If the client is slow to consume data, the stream naturally slows down, preventing memory issues.
+
+### Implementation Pattern for Streaming
+
+Here's how the `/chatOverStream` endpoint forwards chunks in real-time:
+
+```csharp
+[HttpPost("conversations/{conversationId}/chatOverStream")]
+public async Task ChatOverStream(string conversationId, [FromBody] ChatRequest request)
+{
+    // 1. Validate authentication and retrieve Foundry threadId
+    var conversation = await GetAndValidateConversation(conversationId);
+    
+    // 2. Set up Server-Sent Events response
+    Response.ContentType = "text/event-stream";
+    Response.Headers.Add("Cache-Control", "no-cache");
+    Response.Headers.Add("Connection", "keep-alive");
+    
+    try
+    {
+        // 3. Call AI Foundry agent in streaming mode
+        var agentStream = await _agentClient.GetResponseAsync(
+            threadId: conversation.FoundryThreadId,
+            message: request.Message,
+            metadata: new { product = request.Product },
+            stream: true  // Enable streaming
+        );
+        
+        // 4. Forward chunks as they arrive
+        await foreach (var chunk in agentStream)
+        {
+            var sseEvent = new {
+                id = conversationId,
+                messages = new[] {
+                    new {
+                        id = chunk.MessageId,
+                        text = chunk.Delta,  // Incremental text fragment
+                        createdDateTime = DateTime.UtcNow
+                    }
+                }
+            };
+            
+            // Immediately write to response stream
+            await Response.WriteAsync($"data: {JsonSerializer.Serialize(sseEvent)}\n\n");
+            await Response.Body.FlushAsync();  // Force immediate send
+        }
+        
+        // 5. Send completion event
+        await Response.WriteAsync($"event: end\ndata: {JsonSerializer.Serialize(new { id = conversationId, messages = Array.Empty<object>() })}\n\n");
+    }
+    catch (Exception ex)
+    {
+        // 6. Send error event if stream fails
+        await Response.WriteAsync($"event: error\ndata: {JsonSerializer.Serialize(new { code = "InternalError", message = ex.Message })}\n\n");
+    }
+}
+```
+
+### Synchronous vs. Streaming: Same Agent, Different Modes
+
+| Aspect | `/chat` (Synchronous) | `/chatOverStream` (Streaming) |
+|--------|----------------------|------------------------------|
+| Agent Call | Same agent, `stream: false` | Same agent, `stream: true` |
+| API Behavior | Waits for complete response | Forwards chunks immediately |
+| Response Format | Single JSON object | Server-Sent Events (SSE) |
+| Client Perception | Higher latency, all-at-once | Lower latency, progressive |
+| Use Case | Batch processing, simple UIs | Interactive chat, real-time UIs |
+| Memory Usage | Must buffer full response | Minimal buffering |
+
+### Error Handling in Streaming
+
+Errors can occur at two stages:
+
+**Before Stream Establishment:**
+- Standard HTTP error response (401, 403, 404, etc.)
+- Connection never upgrades to SSE
+
+**During Streaming:**
+- An `event: error` is sent with error details
+- Connection is closed after the error event
+- Client must handle the error and potentially retry or create a new conversation
+
+### Heartbeat Mechanism
+
+To prevent connection timeouts during long pauses in agent generation, the API should send periodic heartbeat events:
+
+```csharp
+// Send keepalive every 15 seconds during long waits
+await Response.WriteAsync("event: keepalive\ndata: {}\n\n");
+await Response.Body.FlushAsync();
+```
+
+Clients should ignore these events and not treat them as content.
+
+---
+
+## 3. Endpoint Implementation Details
 
 This section describes the high-level logic for each REST API endpoint.
 
@@ -98,19 +244,22 @@ This endpoint sends a message in an existing conversation.
 
 ### `POST /conversations/{conversationId}/chatOverStream` (Streaming)
 
-This endpoint sends a message and streams the response.
+This endpoint sends a message and streams the response in real-time.
 
 1.  **Authentication and Validation**: Same as the synchronous endpoint, including the critical security check to match the `UserId`.
 2.  **Establish SSE Connection**: Set the response `Content-Type` to `text/event-stream`.
 3.  **Call AI Foundry (Streaming)**:
-    - Make a streaming call to the **Routing Agent**. The logic is similar to the synchronous call, but the API will now receive chunks of data instead of a single response.
-4.  **Stream Processing**:
-    - As data chunks are received from the AI Foundry, the API layer must:
+    - Make a streaming call to the **Routing Agent** with `stream: true`.
+    - The agent will return an asynchronous stream of response chunks rather than a single complete response.
+4.  **Stream Processing and Real-Time Forwarding**:
+    - As data chunks are received from the AI Foundry agent, the API immediately processes and forwards them:
         - Wrap each chunk in the Server-Sent Events (SSE) `data:` format.
-        - Forward events like `keepalive` directly to the client.
-        - If the Foundry signals the end of the stream, the API sends the `event: end` message.
-        - If an error occurs mid-stream, the API sends an `event: error` and closes the connection.
-    - The API acts as a pass-through proxy for the stream, adding the necessary SSE framing.
+        - Call `Response.Body.FlushAsync()` after each write to force immediate transmission to the client.
+        - Send periodic `keepalive` events (~15 seconds) during long pauses to prevent connection timeouts.
+        - When the agent signals completion, send the `event: end` message.
+        - If an error occurs mid-stream, send an `event: error` and close the connection.
+    - **Critical**: The API acts as a **streaming proxy** with no buffering. Each chunk flows directly from the agent through the API to the client, enabling the client to see text appear progressively as the agent generates it.
+    - This creates an end-to-end streaming pipeline where latency is minimized and users experience real-time response generation.
 
 ---
 

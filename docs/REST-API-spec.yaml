@@ -67,7 +67,7 @@ paths:
               examples:
                 newConversation:
                   value:
-                    id: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+                    conversationId: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
                     createdDateTime: "2025-10-29T10:00:00.000Z"
                     displayName: ""
                     state: "active"
@@ -125,16 +125,16 @@ paths:
               examples:
                 chatResponse:
                   value:
-                    id: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+                    conversationId: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
                     createdDateTime: "2025-10-29T10:00:00.000Z"
                     displayName: "Weather in Stockholm"
                     state: "active"
                     turnCount: 1
                     messages:
-                      - id: "cc211f56-1a5e-0af0-fec2-c354ce468b95"
+                      - messageId: "cc211f56-1a5e-0af0-fec2-c354ce468b95"
                         text: "What is the weather like in Stockholm?"
                         createdDateTime: "2025-10-29T10:05:00.000Z"
-                      - id: "3fe6b260-c682-4f8e-a201-022ccb300742"
+                      - messageId: "3fe6b260-c682-4f8e-a201-022ccb300742"
                         text: "The weather in Stockholm is sunny with a temperature of 15°C."
                         createdDateTime: "2025-10-29T10:05:05.000Z"
         '400':
@@ -197,10 +197,10 @@ paths:
                   summary: Example SSE stream
                   value: |
                     data: {
-                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
                       "messages": [
                         {
-                          "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+                          "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
                           "text": "The weather in Stockholm is sunny",
                           "createdDateTime": "2025-10-29T10:05:05.000Z"
                         }
@@ -208,10 +208,10 @@ paths:
                     }
 
                     data: {
-                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
                       "messages": [
                         {
-                          "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+                          "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
                           "text": " with a temperature of 15°C.",
                           "createdDateTime": "2025-10-29T10:05:05.000Z"
                         }
@@ -220,7 +220,7 @@ paths:
 
                     event: end
                     data: {
-                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
                       "messages": []
                     }
         '400':
@@ -267,13 +267,13 @@ components:
       type: object
       description: Represents a chat conversation with Irma
       required:
-        - id
+        - conversationId
         - createdDateTime
         - displayName
         - state
         - turnCount
       properties:
-        id:
+        conversationId:
           type: string
           format: uuid
           description: The unique identifier for the conversation
@@ -323,11 +323,11 @@ components:
       type: object
       description: Represents a single message in a conversation
       required:
-        - id
+        - messageId
         - text
         - createdDateTime
       properties:
-        id:
+        messageId:
           type: string
           format: uuid
           description: The unique identifier for the message
@@ -399,10 +399,10 @@ components:
       type: object
       description: A single Server-Sent Event in the stream
       required:
-        - id
+        - conversationId
         - messages
       properties:
-        id:
+        conversationId:
           type: string
           format: uuid
           description: The unique identifier for the conversation

@@ -15,7 +15,7 @@ The single point of truth of how the API is and should be implemented can be fou
     - [4.1 Overall Interaction Architecture](#41-overall-interaction-architecture)
     - [4.2 Streaming Architecture](#42-streaming-architecture)
     - [4.3 Endpoint Implementation Details](#43-endpoint-implementation-details)
-    - [4.4 Threading, State Management, and Security](#44-threading-state-management-and-security)
+    - [4.4 Secure State Management and Authorization](#44-secure-state-management-and-authorization)
     - [4.5 Example Chat Workflow](#45-example-chat-workflow)
 5. [API Reference](#5-api-reference)
 6. [Best Practices](#6-best-practices)
@@ -139,7 +139,7 @@ curl -X POST https://irma.example.com/v1/irma/conversations/{conversationId}/cha
 
 A **conversation** represents a multi-turn chat session between a user and Irma. Each conversation:
 
-- Has a unique identifier (`id`)
+- Has a unique identifier (`conversationId`)
 - Maintains message history across turns
 - Can be in different states (`active`, `disengagedForRai`)
 - Automatically generates a display name from the first user message
@@ -155,7 +155,7 @@ A **conversation** represents a multi-turn chat session between a user and Irma.
 
 Messages are the fundamental units of conversation. Each message has:
 
-- A unique identifier (`id`)
+- A unique identifier (`messageId`)
 - Text content
 - Creation timestamp
 - Role (user request or assistant response)
@@ -255,37 +255,50 @@ The system is composed of two primary components:
 
 #### High-Level Data Flow
 
-The interaction follows a clear, decoupled pattern:
+The interaction follows a clear, decoupled pattern that now includes a crucial state-management step.
 
 ```mermaid
 graph TD
-    A[Client/Device] -- HTTPS Request --> B(Irma REST API);
-    B -- Validates Auth & Request --> C{API Logic};
-    C -- Formats & Forwards Request --> D[Azure AI Foundry: Routing Agent];
-    D -- Routes based on 'product' --> E[Azure AI Foundry: Product Agent];
-    E -- Generates Response --> D;
-    D -- Returns Response --> C;
-    C -- Formats & Returns Response --> B;
-    B -- Response --> A;
+    subgraph "Client"
+        A[Device App]
+    end
 
-    subgraph "Irma REST API"
-        B
-        C
+    subgraph "Irma Web API"
+        B(API Endpoint)
+        C{Security & State Check}
+        D[Conversation Store<br>(Azure SQL)]
+        E(AI Foundry Client)
     end
 
     subgraph "Azure AI Foundry"
-        D
-        E
+        F[Routing Agent]
     end
+
+    A -- 1. HTTPS Request with conversationId & token --> B;
+    B -- 2. conversationId & UserId from token --> C;
+    C -- 3. "SELECT FoundryThreadId, UserId WHERE ConversationId = ?" --> D;
+    D -- 4. Returns FoundryThreadId & Stored UserId --> C;
+    C -- 5. "Does token UserId match stored UserId?" --> C;
+    C -- 6. On success, calls with FoundryThreadId --> E;
+    E -- 7. Forwards request --> F;
+    F -- 8. Returns response --> E;
+    E -- 9. Returns response --> B;
+    B -- 10. HTTPS Response --> A;
+
+    linkStyle 2 stroke:blue,stroke-width:2px;
+    linkStyle 3 stroke:blue,stroke-width:2px;
+    linkStyle 4 stroke:red,stroke-width:4px;
 ```
 
-1.  **Client to API**: A client (e.g., a device's companion app) sends an HTTPS request to the Irma REST API. The request includes a JWT bearer token for authentication.
-2.  **API Layer**: The .NET API validates the JWT, ensuring the user is authenticated and has the required scopes (`chat.read`, `chat.write`). It also validates the request payload against the OpenAPI specification.
-3.  **API to AI Foundry**: The API layer translates the incoming request into a call to the Azure AI Foundry's **Routing Agent**. It passes the user's message along with critical metadata, including the `product` identifier and a unique `threadId` corresponding to the `conversationId`.
-4.  **AI Foundry Internal Routing**: The **Routing Agent** inspects the `product` metadata (e.g., "Ixx/1.0"). Based on this information, it determines which specialized **Product Agent** is best equipped to handle the query and forwards the request to it.
-5.  **Response Generation**: The selected **Product Agent** processes the query, leveraging its specialized knowledge base and tools to generate a response.
-6.  **Response Return**: The response is passed back through the Routing Agent to the API layer. For streaming endpoints, this happens in chunks.
-7.  **API to Client**: The API layer formats the response according to the API specification (either a complete JSON object or a Server-Sent Events stream) and sends it back to the client.
+1.  **Client to API**: A client sends an HTTPS request to an endpoint like `/conversations/{conversationId}/chat`. The request includes a JWT bearer token for authentication.
+2.  **API Layer - Authentication**: The .NET API validates the JWT, ensuring the user is authenticated. It extracts a stable `UserId` (e.g., the `oid` claim) from the token.
+3.  **API Layer - State Lookup**: The API queries the **Conversation Store** (Azure SQL) using the `conversationId` from the URL to retrieve the stored `UserId` and the internal `FoundryThreadId`.
+4.  **API Layer - Authorization**: The API **critically compares** the `UserId` from the token with the `UserId` retrieved from the database. If they do not match, the request is rejected with an `HTTP 404 Not Found`.
+5.  **API to AI Foundry**: If authorization succeeds, the API layer translates the incoming request into a call to the Azure AI Foundry's **Routing Agent**, using the retrieved `FoundryThreadId`.
+6.  **AI Foundry Internal Routing**: The **Routing Agent** inspects the `product` metadata and forwards the request to the appropriate specialized **Product Agent**.
+7.  **Response Generation**: The selected **Product Agent** processes the query and generates a response.
+8.  **Response Return**: The response is passed back through the agent system to the API layer.
+9.  **API to Client**: The API layer formats the response according to the API specification and sends it back to the client.
 
 ### 4.2 Streaming Architecture
 
@@ -384,7 +397,7 @@ public async Task ChatOverStream(string conversationId, [FromBody] ChatRequest r
         }
         
         // 5. Send completion event
-        await Response.WriteAsync($"event: end\\ndata: {JsonSerializer.Serialize(new { id = conversationId, messages = Array.Empty<object>() })}\\n\\n");
+        await Response.WriteAsync($"event: end\\ndata: {JsonSerializer.Serialize(new { conversationId = conversationId, messages = Array.Empty<object>() })}\\n\\n");
     }
     catch (Exception ex)
     {
@@ -440,12 +453,9 @@ This endpoint initiates a new chat session.
 
 1.  **Authentication/Authorization**: Validate the incoming JWT bearer token. The token must be valid and contain the `api://irma/chat.write` scope.
 2.  **Create Conversation State**:
-    - Generate a new, unique `conversationId` (UUID).
-    - Create a new "thread" in the Azure AI Foundry. The `threadId` returned from the Foundry should be stored.
-    - Persist the mapping between the `conversationId`, the AI Foundry `threadId`, and the user's identity (e.g., the `sub` or `oid` claim from the JWT). This is crucial for security and state management. A simple database table like `Conversations` would be suitable:
-      | `ConversationId` (PK) | `FoundryThreadId` | `UserId` | `CreatedDateTime` |
-      |-----------------------|-------------------|----------|-------------------|
-      | `uuid`                | `string`          | `string` | `datetime`        |
+    -   The API generates a new, unique `conversationId` (UUID).
+    -   It calls the AI Foundry to create a new "thread" and receives a `FoundryThreadId`.
+    -   It persists a new record in the Conversation Store, mapping the `conversationId`, `FoundryThreadId`, and the user's `UserId` (from the JWT).
 3.  **Response**: Return a `201 Created` response with the newly created `Conversation` object, including the `conversationId`.
 
 #### `POST /conversations/{conversationId}/chat` (Synchronous)
@@ -454,21 +464,15 @@ This endpoint sends a message in an existing conversation.
 
 1.  **Authentication/Authorization**: Validate the JWT and required `api://irma/chat.write` scope.
 2.  **State Retrieval and Validation**:
-    - Retrieve the conversation record from the database using the `conversationId` from the URL path.
-    - **Security Check**: Verify that the `UserId` stored with the conversation matches the user identity from the current JWT. If they do not match, return a `404 Not Found` or `403 Forbidden` to prevent one user from accessing another's conversation.
-    - Retrieve the corresponding `FoundryThreadId`.
+    -   Retrieve the conversation record from the Conversation Store using the `conversationId`.
+    -   **Security Check**: Verify that the `UserId` from the store matches the `UserId` from the current JWT. If not, return `404 Not Found`.
+    -   Retrieve the corresponding `FoundryThreadId`.
 3.  **Call AI Foundry**:
-    - Construct a request to the **Routing Agent** in Azure AI Foundry.
-    - The request should include:
-        - `FoundryThreadId`: To maintain context within the AI Foundry.
-        - `message`: The user's message from the request body.
-        - `additionalContext`: Any additional context provided.
-        - `metadata`: A structured object containing the `product` identifier (e.g., `{ "product": "Ixx/1.0" }`).
+    -   Construct a request to the **Routing Agent** in Azure AI Foundry, including the `FoundryThreadId`.
 4.  **Response Handling**:
-    - Await the complete response from the AI Foundry.
-    - The API is responsible for updating its own state, such as `turnCount`.
-    - Format the response into the `ConversationWithMessages` schema, including the full message history as required by the spec.
-    - Return a `200 OK` with the JSON payload.
+    -   Await the complete response from the AI Foundry.
+    -   Update state (e.g., `turnCount`) and format the response.
+    -   Return a `200 OK` with the JSON payload.
 
 #### `POST /conversations/{conversationId}/chatOverStream` (Streaming)
 
@@ -477,49 +481,68 @@ This endpoint sends a message and streams the response in real-time.
 1.  **Authentication and Validation**: Same as the synchronous endpoint, including the critical security check to match the `UserId`.
 2.  **Establish SSE Connection**: Set the response `Content-Type` to `text/event-stream`.
 3.  **Call AI Foundry (Streaming)**:
-    - Make a streaming call to the **Routing Agent** with `stream: true`.
-    - The agent will return an asynchronous stream of response chunks rather than a single complete response.
+    -   Make a streaming call to the **Routing Agent** with `stream: true`, using the `FoundryThreadId`.
 4.  **Stream Processing and Real-Time Forwarding**:
-    - As data chunks are received from the AI Foundry agent, the API immediately processes and forwards them:
-        - Wrap each chunk in the Server-Sent Events (SSE) `data:` format.
-        - Call `Response.Body.FlushAsync()` after each write to force immediate transmission to the client.
-        - Send periodic `keepalive` events (~15 seconds) during long pauses to prevent connection timeouts.
-        - When the agent signals completion, send the `event: end` message.
-        - If an error occurs mid-stream, send an `event: error` and close the connection.
-    - **Critical**: The API acts as a **streaming proxy** with no buffering. Each chunk flows directly from the agent through the API to the client, enabling the client to see text appear progressively as the agent generates it.
-    - This creates an end-to-end streaming pipeline where latency is minimized and users experience real-time response generation.
+    -   The API acts as a non-buffering proxy, immediately forwarding data chunks from the agent to the client, wrapped in the SSE format.
 
-### 4.4 Threading, State Management, and Security
+### 4.4 Secure State Management and Authorization
 
-#### Mapping Conversations to AI Foundry Threads
+Properly managing conversation state is critical for both functionality and security. The most significant security risk in a multi-user chat system is one user gaining access to another user's conversation. This section outlines the architecture designed to prevent this.
 
-The core of maintaining conversational context lies in correctly mapping the API's `conversationId` to a "thread" or equivalent concept in Azure AI Foundry.
+#### 4.4.1 The Core Problem: Conversation Hijacking
 
--   **1:1 Mapping**: Each `conversationId` in the Irma API MUST correspond to exactly one `threadId` in the AI Foundry.
--   **State Management at the API Layer**: The API layer is responsible for managing this mapping. A persistent store (e.g., Azure SQL, Cosmos DB) is required to store the relationship between `conversationId`, `FoundryThreadId`, and `UserId`. This externalizes the state from the .NET application, allowing it to be stateless and scalable.
+A naive implementation might trust a `threadId` sent from the client. As noted in the Azure AI Foundry Baseline sample, this is a major security flaw:
 
-The API does **not** need to store the message history itself, as the AI Foundry thread is assumed to manage the full context of the conversation. The API only needs to store the mapping.
+> "// TODO: [security] Do not trust client to provide threadId. Instead map current user to their active threadid in your application's own state store. Without this security control in place, a user can inject messages into another user's thread."
 
-#### Security: Preventing Conversation Hijacking
+Our architecture directly addresses this by never trusting the client with internal state identifiers and by binding every conversation to a specific user.
 
-The most significant security risk is an attacker using a known `conversationId` to access or interfere with another user's session. The solution is to bind each conversation to the authenticated user.
+#### 4.4.2 The Solution: A Persistent Conversation Store
 
-**Implementation:**
+The Irma Web API layer is responsible for managing the mapping between the public-facing `conversationId`, the internal Azure AI Foundry `threadId`, and the authenticated user's identity (`UserId`). This is achieved using a persistent data store, referred to as the "Conversation Store."
 
-1.  **On Conversation Creation (`POST /conversations`)**: When a conversation is created, extract a stable user identifier from the JWT (e.g., `sub` for subject or `oid` for object ID). Store this `UserId` alongside the `conversationId` and `FoundryThreadId`.
-2.  **On Every Subsequent Request (`POST .../chat`)**:
-    - For every request to an existing conversation, extract the `UserId` from the token.
-    - Before processing the request, query the database for the given `conversationId`.
-    - **Crucially, compare the `UserId` from the token with the `UserId` stored in the database for that conversation.**
-    - If they do not match, the request is unauthorized. Return an `HTTP 404 Not Found`. We use 404 instead of 403 to avoid revealing that the conversation ID is valid but belongs to someone else.
+**Pluggable Architecture:**
+To ensure flexibility, the Conversation Store is implemented behind an interface (e.g., `IConversationStore`). This allows the underlying data storage technology to be swapped without changing the core application logic. The initial and recommended implementation will use **Azure SQL Database**.
 
-This ensures that even if a `conversationId` is leaked, it is useless without a valid JWT for the user who created it.
+**Data Model:**
+The store will maintain a simple record for each conversation with the following schema:
 
-#### Handling De-synchronized State (Lost Foundry Thread)
+| Column | Type | Description |
+| --- | --- | --- |
+| `ConversationId` (PK) | `string` (UUID) | The public, unique identifier for the conversation. |
+| `FoundryThreadId` | `string` | The internal identifier for the corresponding thread in Azure AI Foundry. |
+| `UserId` | `string` | The stable, unique identifier for the user (from the JWT `sub` or `oid` claim). |
+| `CreatedDateTime` | `datetime` | Timestamp of when the conversation was created. |
+| `State` | `string` | The current state of the conversation (e.g., `active`). |
 
-A critical edge case is when the AI Foundry thread is deleted or lost, but the conversation record still exists in the Irma API's database. This could happen if the Foundry's state is reset or a thread expires.
+#### 4.4.3 Technology Choice: Azure SQL over Alternatives
 
-If a user attempts to send a message to a `conversationId` whose underlying `FoundryThreadId` is no longer valid in the Foundry, the API should **not** transparently create a new thread. Doing so would lead to a broken user experience due to the complete loss of conversational context.
+- **Why Azure SQL?**
+  - **Data Integrity:** As a relational database, Azure SQL enforces the uniqueness of `ConversationId` via a primary key, preventing data corruption.
+  - **Query Flexibility:** While the primary lookup is by `ConversationId`, SQL allows for efficient administrative queries, such as finding all conversations for a user.
+  - **Maturity and Tooling:** The .NET ecosystem has excellent support for SQL databases through Entity Framework Core, which simplifies development, migrations, and testing.
+- **Why Not Azure Table Storage?** While simple for key-value lookups, Table Storage lacks the strong data integrity guarantees and flexible querying capabilities of Azure SQL, making it less suitable for this relational mapping.
+- **Why Not a Cache (e.g., Redis)?** A caching layer is not necessary initially. Lookups on an indexed primary key in Azure SQL are extremely fast (typically single-digit milliseconds) and will not be a performance bottleneck. Adding a cache would introduce unnecessary complexity at this stage.
+
+#### 4.4.4 Secure Authorization Flow
+
+This flow is executed on **every** request to an existing conversation (e.g., `POST /conversations/{conversationId}/chat`).
+
+1.  **Authenticate:** The API validates the incoming JWT bearer token.
+2.  **Extract `UserId`:** A stable user identifier (e.g., the `oid` claim) is extracted from the validated token.
+3.  **Lookup Conversation:** The API queries the Conversation Store using the `conversationId` from the URL.
+    ```sql
+    SELECT FoundryThreadId, UserId FROM Conversations WHERE ConversationId = @conversationId
+    ```
+4.  **Authorize:**
+  - **If no record is found:** The `conversationId` is invalid. The API **must** return an `HTTP 404 Not Found` response.
+  - **If a record is found:** The API **must** compare the `UserId` from the database record with the `UserId` extracted from the token.
+    - **If they match:** The user is authorized. The request proceeds using the retrieved `FoundryThreadId`.
+    - **If they do not match:** This is an authorization failure. The API **must** return an `HTTP 404 Not Found` to avoid revealing that the conversation ID is valid but belongs to another user.This ensures that even if a `conversationId` is leaked, it is useless without a valid JWT for the user who created it.
+
+#### 4.4.5 Handling De-synchronized State (Lost Foundry Thread)
+
+A critical edge case is when the AI Foundry thread is deleted or lost, but the conversation record still exists in the Irma API's database.
 
 **Recommended Implementation:**
 
@@ -537,7 +560,7 @@ If a user attempts to send a message to a `conversationId` whose underlying `Fou
 }
 ```
 
-This approach forces the client to handle the error and guide the user to start a new conversation by calling `POST /conversations`, which is the correct and most transparent way to manage the loss of state.
+This approach forces the client to handle the error and guide the user to start a new conversation, which is the correct way to manage the loss of state.
 
 ### 4.5 Example Chat Workflow
 
@@ -562,17 +585,17 @@ The user opens their device app and wants to start a chat.
     {}
     ```
 2.  **Irma API (Internal Logic)**:
-    - Validates the JWT for User A.
-    - Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
-    - Generates a new `conversationId`: `conv-abc-456`.
-    - Stores the mapping in its database: `(conv-abc-456, foundry-thread-123, user_A_id)`.
+    -   Validates the JWT for User A and extracts `user_A_id`.
+    -   Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
+    -   Generates a new `conversationId`: `conv-abc-456`.
+    -   Stores the mapping in the Conversation Store: `(conv-abc-456, foundry-thread-123, user_A_id)`.
 3.  **Irma API -> Device App**: The API returns the new conversation details.
     ```http
     HTTP/1.1 201 Created
     Content-Type: application/json
 
     {
-      "id": "conv-abc-456",
+      "conversationId": "conv-abc-456",
       "createdDateTime": "2025-10-29T10:00:00.000Z",
       "state": "active",
       "turnCount": 0
@@ -599,10 +622,11 @@ The user asks a question about their "Ixx/1.0" camera.
     }
     ```
 2.  **Irma API (Internal Logic)**:
-    - Validates the JWT for User A.
-    - Looks up `conv-abc-456` in its database. It finds the record and confirms the owner is `user_A_id`, which matches the token.
-    - It retrieves the `FoundryThreadId`: `foundry-thread-123`.
-    - It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
+    -   Validates the JWT for User A and extracts `user_A_id`.
+    -   Looks up `conv-abc-456` in the Conversation Store.
+    -   It finds the record and confirms the owner is `user_A_id`, which matches the token.
+    -   It retrieves the `FoundryThreadId`: `foundry-thread-123`.
+    -   It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
 3.  **AI Foundry (Internal Logic)**:
     - The Routing Agent receives the request for `foundry-thread-123`.
     - It inspects the metadata and sees `"product": "Ixx/1.0"`.
@@ -615,11 +639,11 @@ The user asks a question about their "Ixx/1.0" camera.
     Content-Type: application/json
 
     {
-      "id": "conv-abc-456",
+      "conversationId": "conv-abc-456",
       "turnCount": 1,
       "messages": [
-        { "id": "msg-1", "text": "Is the temperature reading normal?", ... },
-        { "id": "msg-2", "text": "A temperature of 42°C is above the normal operating range...", ... }
+        { "messageId": "msg-1", "text": "Is the temperature reading normal?", ... },
+        { "messageId": "msg-2", "text": "A temperature of 42°C is above the normal operating range...", ... }
       ],
       ...
     }
@@ -730,7 +754,7 @@ If successful, this method returns a `201 Created` response code and a JSON obje
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | String | The unique identifier for the conversation. Use this in subsequent chat requests. |
+| `conversationId` | String | The unique identifier for the conversation. Use this in subsequent chat requests. |
 | `createdDateTime` | String | The date and time the conversation was created, in UTC (ISO 8601 format). |
 | `displayName` | String | The display name of the conversation. Empty on creation; auto-generated from first message. |
 | `state` | String | The state of the conversation (`active`, `disengagedForRai`). |
@@ -760,7 +784,7 @@ HTTP/1.1 201 Created
 Content-Type: application/json
 
 {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "createdDateTime": "2025-10-29T10:00:00.000Z",
   "displayName": "",
   "state": "active",
@@ -812,7 +836,7 @@ If successful, this method returns a `200 OK` response code and a JSON object wi
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | String | The unique identifier for the conversation. |
+| `conversationId` | String | The unique identifier for the conversation. |
 | `createdDateTime` | String | The date and time the conversation was created, in UTC. |
 | `displayName` | String | The display name of the conversation (auto-generated from first message). |
 | `state` | String | The state of the conversation. |
@@ -823,7 +847,7 @@ If successful, this method returns a `200 OK` response code and a JSON object wi
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | String | The unique identifier for the message. |
+| `messageId` | String | The unique identifier for the message. |
 | `text` | String | The content of the message. |
 | `createdDateTime` | String | The date and time the message was created, in UTC. |
 
@@ -859,19 +883,19 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "createdDateTime": "2025-10-29T10:00:00.000Z",
   "displayName": "Weather in Stockholm",
   "state": "active",
   "turnCount": 1,
   "messages": [
     {
-      "id": "cc211f56-1a5e-0af0-fec2-c354ce468b95",
+      "messageId": "cc211f56-1a5e-0af0-fec2-c354ce468b95",
       "text": "What is the weather like in Stockholm?",
       "createdDateTime": "2025-10-29T10:05:00.000Z"
     },
     {
-      "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+      "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
       "text": "The weather in Stockholm is sunny with a temperature of 15°C.",
       "createdDateTime": "2025-10-29T10:05:05.000Z"
     }
@@ -944,14 +968,14 @@ Each data event contains a JSON object with:
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | String | The unique identifier for the conversation. |
+| `conversationId` | String | The unique identifier for the conversation. |
 | `messages` | Array | An array containing one or more message objects with text chunks. |
 
 **Message Object in Stream:**
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | String | The unique identifier for the message (consistent across chunks). |
+| `messageId` | String | The unique identifier for the message (consistent across chunks). |
 | `text` | String | A chunk of the response message content. |
 | `createdDateTime` | String | The date and time the message was created, in UTC. |
 
@@ -994,10 +1018,10 @@ HTTP/1.1 200 OK
 Content-Type: text/event-stream
 
 data: {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "messages": [
     {
-      "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+      "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
       "text": "The weather in Stockholm is sunny",
       "createdDateTime": "2025-10-29T10:05:05.000Z"
     }
@@ -1005,10 +1029,10 @@ data: {
 }
 
 data: {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "messages": [
     {
-      "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+      "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
       "text": " with a temperature of 15°C.",
       "createdDateTime": "2025-10-29T10:05:05.000Z"
     }
@@ -1017,7 +1041,7 @@ data: {
 
 event: end
 data: {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "messages": []
 }
 
@@ -1030,10 +1054,10 @@ HTTP/1.1 200 OK
 Content-Type: text/event-stream
 
 data: {
-  "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+  "conversationId": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
   "messages": [
     {
-      "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+      "messageId": "3fe6b260-c682-4f8e-a201-022ccb300742",
       "text": "Processing your request",
       "createdDateTime": "2025-10-29T10:05:05.000Z"
     }
@@ -1062,7 +1086,7 @@ Represents a chat conversation with Irma.
 
 ```json
 {
-  "id": "string",
+  "conversationId": "string",
   "createdDateTime": "string (ISO 8601)",
   "displayName": "string",
   "state": "active | disengagedForRai",
@@ -1076,7 +1100,7 @@ Represents a single message in a conversation.
 
 ```json
 {
-  "id": "string",
+  "messageId": "string",
   "text": "string",
   "createdDateTime": "string (ISO 8601)"
 }

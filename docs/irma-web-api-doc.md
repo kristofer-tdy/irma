@@ -48,13 +48,33 @@ The Irma API enables developers to build conversational experiences with Irma, a
 
 All API URLs referenced in this document have the following base URL:
 
-```
+```text
 https://<irma-url>/v1/irma/
 ```
 
 In this URL, `<irma-url>` is a placeholder for the actual URL where the Irma backend will be hosted.
 
 **Note:** Version format is `v1`, not semantic versioning. Future major versions will be `v2`, `v3`, etc.
+
+### 1.5 OpenAPI Specification (Swagger)
+
+The Irma Web API provides an interactive way to explore and test its endpoints through an embedded Swagger UI. This user interface is automatically generated from the `REST-API-spec.yaml` OpenAPI specification file.
+
+**Swagger UI Endpoint:**
+
+You can access the interactive documentation by navigating to the following URL in your browser:
+
+```text
+https://<irma-url>/swagger
+```
+
+From this UI, you can:
+
+- View all available API endpoints, their parameters, and response models.
+- Execute API requests directly from the browser to test functionality.
+- View example request and response payloads.
+
+This is the recommended way to explore the API's capabilities and is always in sync with the API's implementation.
 
 ---
 
@@ -110,7 +130,7 @@ client_id={client-id}
 
 ### 2.3 Quick Start Example
 
-**Step 1: Create a conversation**
+#### Step 1: Create a conversation
 
 ```bash
 curl -X POST https://irma.example.com/v1/irma/conversations \
@@ -119,7 +139,7 @@ curl -X POST https://irma.example.com/v1/irma/conversations \
   -d '{}'
 ```
 
-**Step 2: Send a message**
+#### Step 2: Send a message
 
 ```bash
 curl -X POST https://irma.example.com/v1/irma/conversations/{conversationId}/chat \
@@ -166,21 +186,24 @@ Messages are returned in chronological order, with the most recent messages appe
 
 The **product** field is a required parameter that identifies the device model and version you're asking about. It follows the format:
 
-```
+```text
 <ProductName>/<Version>
 ```
 
 **Examples:**
+
 - `Ixx/1.0` - Ixx camera, version 1.0
 - `Ixx-Pro/2.5` - Ixx Pro camera, version 2.5
 - `SensorX/1.2` - SensorX device, version 1.2
 
 **Purpose:**
+
 - Helps Irma provide device-specific answers
 - Used for analytics and usage tracking
 - Enables version-specific feature guidance
 
 **Validation:**
+
 - Must be a non-empty string
 - Should follow the slash-separated format
 - Invalid formats return `400 Bad Request`
@@ -229,12 +252,14 @@ Conversations can be in one of the following states:
 The Irma API offers two response patterns:
 
 **Synchronous (`/chat`):**
+
 - Returns the complete response in a single HTTP response
 - Simpler to implement
 - Higher perceived latency for long responses
 - Use for: Short queries, batch processing
 
 **Streaming (`/chatOverStream`):**
+
 - Returns response chunks progressively via Server-Sent Events (SSE)
 - Lower perceived latency
 - Better user experience for long responses
@@ -290,15 +315,15 @@ graph TD
     linkStyle 4 stroke:red,stroke-width:4px;
 ```
 
-1.  **Client to API**: A client sends an HTTPS request to an endpoint like `/conversations/{conversationId}/chat`. The request includes a JWT bearer token for authentication.
-2.  **API Layer - Authentication**: The .NET API validates the JWT, ensuring the user is authenticated. It extracts a stable `UserId` (e.g., the `oid` claim) from the token.
-3.  **API Layer - State Lookup**: The API queries the **Conversation Store** (Azure SQL) using the `conversationId` from the URL to retrieve the stored `UserId` and the internal `FoundryThreadId`.
-4.  **API Layer - Authorization**: The API **critically compares** the `UserId` from the token with the `UserId` retrieved from the database. If they do not match, the request is rejected with an `HTTP 404 Not Found`.
-5.  **API to AI Foundry**: If authorization succeeds, the API layer translates the incoming request into a call to the Azure AI Foundry's **Routing Agent**, using the retrieved `FoundryThreadId`.
-6.  **AI Foundry Internal Routing**: The **Routing Agent** inspects the `product` metadata and forwards the request to the appropriate specialized **Product Agent**.
-7.  **Response Generation**: The selected **Product Agent** processes the query and generates a response.
-8.  **Response Return**: The response is passed back through the agent system to the API layer.
-9.  **API to Client**: The API layer formats the response according to the API specification and sends it back to the client.
+1. **Client to API**: A client sends an HTTPS request to an endpoint like `/conversations/{conversationId}/chat`. The request includes a JWT bearer token for authentication.
+2. **API Layer - Authentication**: The .NET API validates the JWT, ensuring the user is authenticated. It extracts a stable `UserId` (e.g., the `oid` claim) from the token.
+3. **API Layer - State Lookup**: The API queries the **Conversation Store** (Azure SQL) using the `conversationId` from the URL to retrieve the stored `UserId` and the internal `FoundryThreadId`.
+4. **API Layer - Authorization**: The API **critically compares** the `UserId` from the token with the `UserId` retrieved from the database. If they do not match, the request is rejected with an `HTTP 404 Not Found`.
+5. **API to AI Foundry**: If authorization succeeds, the API layer translates the incoming request into a call to the Azure AI Foundry's **Routing Agent**, using the retrieved `FoundryThreadId`.
+6. **AI Foundry Internal Routing**: The **Routing Agent** inspects the `product` metadata and forwards the request to the appropriate specialized **Product Agent**.
+7. **Response Generation**: The selected **Product Agent** processes the query and generates a response.
+8. **Response Return**: The response is passed back through the agent system to the API layer.
+9. **API to Client**: The API layer formats the response according to the API specification and sends it back to the client.
 
 ### 4.2 Streaming Architecture
 
@@ -423,10 +448,12 @@ public async Task ChatOverStream(string conversationId, [FromBody] ChatRequest r
 Errors can occur at two stages:
 
 **Before Stream Establishment:**
+
 - Standard HTTP error response (401, 403, 404, etc.)
 - Connection never upgrades to SSE
 
 **During Streaming:**
+
 - An `event: error` is sent with error details
 - Connection is closed after the error event
 - Client must handle the error and potentially retry or create a new conversation
@@ -535,10 +562,12 @@ This flow is executed on **every** request to an existing conversation (e.g., `P
     SELECT FoundryThreadId, UserId FROM Conversations WHERE ConversationId = @conversationId
     ```
 4.  **Authorize:**
-  - **If no record is found:** The `conversationId` is invalid. The API **must** return an `HTTP 404 Not Found` response.
-  - **If a record is found:** The API **must** compare the `UserId` from the database record with the `UserId` extracted from the token.
-    - **If they match:** The user is authorized. The request proceeds using the retrieved `FoundryThreadId`.
-    - **If they do not match:** This is an authorization failure. The API **must** return an `HTTP 404 Not Found` to avoid revealing that the conversation ID is valid but belongs to another user.This ensures that even if a `conversationId` is leaked, it is useless without a valid JWT for the user who created it.
+    - **If no record is found:** The `conversationId` is invalid. The API **must** return an `HTTP 404 Not Found` response.
+    - **If a record is found:** The API **must** compare the `UserId` from the database record with the `UserId` extracted from the token.
+        - **If they match:** The user is authorized. The request proceeds using the retrieved `FoundryThreadId`.
+        - **If they do not match:** This is an authorization failure. The API **must** return an `HTTP 404 Not Found` to avoid revealing that the conversation ID is valid but belongs to another user.
+
+This ensures that even if a `conversationId` is leaked, it is useless without a valid JWT for the user who created it.
 
 #### 4.4.5 Handling De-synchronized State (Lost Foundry Thread)
 
@@ -546,10 +575,10 @@ A critical edge case is when the AI Foundry thread is deleted or lost, but the c
 
 **Recommended Implementation:**
 
-1.  The API calls the AI Foundry with the stored `FoundryThreadId`.
-2.  The AI Foundry returns an error indicating the thread was not found.
-3.  The Irma API should then return an `HTTP 409 Conflict` error to the client.
-4.  The error response body should clearly state that the conversation has expired and a new one must be created.
+1. The API calls the AI Foundry with the stored `FoundryThreadId`.
+2. The AI Foundry returns an error indicating the thread was not found.
+3. The Irma API should then return an `HTTP 409 Conflict` error to the client.
+4. The error response body should clearly state that the conversation has expired and a new one must be created.
 
 ```json
 {
@@ -567,6 +596,7 @@ This approach forces the client to handle the error and guide the user to start 
 This workflow demonstrates a complete interaction, from creating a conversation to sending a message.
 
 **Actors:**
+
 - **Device App**: The client application.
 - **Irma API**: The .NET REST API.
 - **AI Foundry**: The agent system.
@@ -575,7 +605,8 @@ This workflow demonstrates a complete interaction, from creating a conversation 
 
 The user opens their device app and wants to start a chat.
 
-1.  **Device App -> Irma API**: The app sends a request to create a conversation.
+1. **Device App -> Irma API**: The app sends a request to create a conversation.
+
     ```http
     POST /v1/irma/conversations HTTP/1.1
     Host: api.irma.example.com
@@ -584,12 +615,15 @@ The user opens their device app and wants to start a chat.
 
     {}
     ```
-2.  **Irma API (Internal Logic)**:
-    -   Validates the JWT for User A and extracts `user_A_id`.
-    -   Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
-    -   Generates a new `conversationId`: `conv-abc-456`.
-    -   Stores the mapping in the Conversation Store: `(conv-abc-456, foundry-thread-123, user_A_id)`.
-3.  **Irma API -> Device App**: The API returns the new conversation details.
+
+2. **Irma API (Internal Logic)**:
+    - Validates the JWT for User A and extracts `user_A_id`.
+    - Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
+    - Generates a new `conversationId`: `conv-abc-456`.
+    - Stores the mapping in the Conversation Store: `(conv-abc-456, foundry-thread-123, user_A_id)`.
+
+3. **Irma API -> Device App**: The API returns the new conversation details.
+
     ```http
     HTTP/1.1 201 Created
     Content-Type: application/json
@@ -606,7 +640,8 @@ The user opens their device app and wants to start a chat.
 
 The user asks a question about their "Ixx/1.0" camera.
 
-1.  **Device App -> Irma API**: The app sends the message to the chat endpoint using the `conversationId`.
+1. **Device App -> Irma API**: The app sends the message to the chat endpoint using the `conversationId`.
+
     ```http
     POST /v1/irma/conversations/conv-abc-456/chat HTTP/1.1
     Host: api.irma.example.com
@@ -621,19 +656,24 @@ The user asks a question about their "Ixx/1.0" camera.
       "product": "Ixx/1.0"
     }
     ```
-2.  **Irma API (Internal Logic)**:
-    -   Validates the JWT for User A and extracts `user_A_id`.
-    -   Looks up `conv-abc-456` in the Conversation Store.
-    -   It finds the record and confirms the owner is `user_A_id`, which matches the token.
-    -   It retrieves the `FoundryThreadId`: `foundry-thread-123`.
-    -   It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
-3.  **AI Foundry (Internal Logic)**:
+
+2. **Irma API (Internal Logic)**:
+    - Validates the JWT for User A and extracts `user_A_id`.
+    - Looks up `conv-abc-456` in the Conversation Store.
+    - It finds the record and confirms the owner is `user_A_id`, which matches the token.
+    - It retrieves the `FoundryThreadId`: `foundry-thread-123`.
+    - It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
+
+3. **AI Foundry (Internal Logic)**:
     - The Routing Agent receives the request for `foundry-thread-123`.
     - It inspects the metadata and sees `"product": "Ixx/1.0"`.
     - It routes the request to the **Ixx Product Agent**.
     - The Ixx agent processes the question ("Is 42°C normal?") and generates a response.
-4.  **AI Foundry -> Irma API**: The Foundry returns the complete response text: "A temperature of 42°C is above the normal operating range of 20-35°C. You should check the device for proper ventilation."
-5.  **Irma API -> Device App**: The API formats the final response and sends it back.
+
+4. **AI Foundry -> Irma API**: The Foundry returns the complete response text: "A temperature of 42°C is above the normal operating range of 20-35°C. You should check the device for proper ventilation."
+
+5. **Irma API -> Device App**: The API formats the final response and sends it back.
+
     ```http
     HTTP/1.1 200 OK
     Content-Type: application/json
@@ -653,9 +693,9 @@ The user asks a question about their "Ixx/1.0" camera.
 
 The user closes the chat window.
 
--   **No Explicit End**: The conversation is implicitly "over." There is no `DELETE` or `END` endpoint.
--   **State**: The conversation `conv-abc-456` remains `active` in the database. If the user returns later, they can continue the conversation, and the context will be preserved in the AI Foundry via `foundry-thread-123`.
--   **Cleanup (Optional)**: A background job could be implemented to archive or delete conversations that have been inactive for an extended period (e.g., > 30 days) to manage resources in both the API database and the AI Foundry.
+- **No Explicit End**: The conversation is implicitly "over." There is no `DELETE` or `END` endpoint.
+- **State**: The conversation `conv-abc-456` remains `active` in the database. If the user returns later, they can continue the conversation, and the context will be preserved in the AI Foundry via `foundry-thread-123`.
+- **Cleanup (Optional)**: A background job could be implemented to archive or delete conversations that have been inactive for an extended period (e.g., > 30 days) to manage resources in both the API database and the AI Foundry.
 
 ---
 
@@ -671,9 +711,9 @@ Irma uses a consistent error envelope across all endpoints. Clients should inspe
 | --- | --- | --- |
 | `400 Bad Request` | The request payload is invalid. | Missing required fields, malformed JSON, unsupported values. |
 | `401 Unauthorized` | Authentication failed. | Missing/expired token, invalid token. |
-| `403 Forbidden` | Authenticated but not authorized. | Token lacks required scopes/claims. |
+| `403 Forbidden` | Authenticated but authorized. | Token lacks required scopes/claims. |
 | `404 Not Found` | Resource does not exist. | Unknown `conversationId`. |
-| `409 Conflict` | Request conflicts with current state. | Attempting to message a disengaged conversation, or the conversation context has expired on the server. |
+| `409 Conflict` | Request conflicts with current state. | Attempting to message a disengaged conversation, or the conversation context has expired. |
 | `500 Internal Server Error` | Unexpected server-side failure. | Transient backend issues. |
 
 #### Error Response Body
@@ -702,18 +742,20 @@ Irma uses a consistent error envelope across all endpoints. Clients should inspe
 | `details` | Array | Optional list of structured error details for compound failures. |
 | `traceId` | String | Correlation identifier for support and observability. **Include this when contacting Irma support.** |
 
-#### Error Handling in Streaming
+#### Error Handling During Streaming
 
 For streaming endpoints (`/chatOverStream`), errors can occur at two stages:
 
 **Before Stream Establishment (HTTP error):**
+
 - Standard error response with appropriate status code and error body
 - Connection never upgrades to SSE
 
 **After Stream Establishment (during streaming):**
+
 - An error event is sent before closing the connection:
 
-```
+```text
 event: error
 data: {
   "code": "InternalError",
@@ -761,6 +803,7 @@ If successful, this method returns a `201 Created` response code and a JSON obje
 | `turnCount` | Integer | The number of turns in the conversation. Initially `0`. |
 
 **Error Responses:**
+
 - `401 Unauthorized` - Invalid or missing authentication token
 - `403 Forbidden` - Token lacks required permissions
 - `500 Internal Server Error` - Server-side error (check `traceId`)
@@ -796,7 +839,7 @@ Content-Type: application/json
 
 #### 5.2.2 Chat (Synchronous)
 
-Sends a message to an existing conversation and receives a complete response.
+Sends a message in an existing conversation and receives a complete response.
 
 **URL:** `POST /conversations/{conversationId}/chat`
 
@@ -854,6 +897,7 @@ If successful, this method returns a `200 OK` response code and a JSON object wi
 **Note:** The response includes the **full conversation history** including all previous messages and the latest exchange.
 
 **Error Responses:**
+
 - `400 Bad Request` - Invalid request payload (missing required fields, invalid format)
 - `401 Unauthorized` - Invalid or missing authentication token
 - `403 Forbidden` - Token lacks required permissions
@@ -982,7 +1026,7 @@ Each data event contains a JSON object with:
 **Stream Semantics and Framing:**
 
 - **Incremental Deltas:** Each chunk contains a text fragment, not the cumulative response. Clients must concatenate `text` fields in arrival order to assemble the complete message.
-- **Event Types:** 
+- **Event Types:**
   - Default data events have `event: message` (may be omitted per SSE spec)
   - Final event has `event: end` with empty messages array
   - Heartbeat events have `event: keepalive` with empty data
@@ -1308,6 +1352,7 @@ if conversation['state'] == 'disengagedForRai':
 ### 7.1 Changelog
 
 #### v1 (2025-10-29)
+
 - Initial release
 - Added conversation creation endpoint
 - Added synchronous chat endpoint
@@ -1319,6 +1364,7 @@ if conversation['state'] == 'disengagedForRai':
 **Reporting Issues:**
 
 When reporting issues, please include:
+
 - The `traceId` from the error response
 - Request timestamp
 - HTTP status code
@@ -1326,8 +1372,8 @@ When reporting issues, please include:
 
 **Contact:**
 
-- Email: support@irma.example.com
-- Documentation: https://docs.irma.example.com
+- Email: <support@irma.example.com>
+- Documentation: <https://docs.irma.example.com>
 
 ### 7.3 Future Enhancements
 
@@ -1349,4 +1395,4 @@ The following features are under consideration for future API versions:
 
 ---
 
-**End of API Specification**
+## End of API Specification

@@ -1,0 +1,551 @@
+openapi: 3.0.3
+info:
+  title: Irma API
+  description: |
+    The Irma API enables developers to build conversational experiences with Irma, 
+    an AI-powered assistant designed to answer questions about your connected devices 
+    (such as cameras, sensors, and other IoT equipment).
+    
+    ## Features
+    - Multi-turn conversations with context retention
+    - Streaming responses via Server-Sent Events (SSE)
+    - Device-specific contextual responses
+    - Azure Entra ID and B2C authentication
+    
+    ## Base URL
+    All endpoints are relative to: `https://<irma-url>/v1/irma/`
+    
+  version: "1"
+  contact:
+    name: Irma API Support
+    email: support@irma.example.com
+  license:
+    name: Proprietary
+    
+servers:
+  - url: https://{irma-url}/v1/irma
+    description: Irma API Server
+    variables:
+      irma-url:
+        default: api.irma.example.com
+        description: The Irma API server hostname
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Conversations
+    description: Create and manage chat conversations with Irma
+  - name: Chat
+    description: Send messages and receive responses
+
+paths:
+  /conversations:
+    post:
+      tags:
+        - Conversations
+      summary: Create a new conversation
+      description: |
+        Creates a new conversation with Irma. Returns a conversation ID that should be 
+        used in subsequent chat requests to maintain context across multiple messages.
+      operationId: createConversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Empty object required for conversation creation
+              example: {}
+      responses:
+        '201':
+          description: Conversation created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+              examples:
+                newConversation:
+                  value:
+                    id: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+                    createdDateTime: "2025-10-29T10:00:00.000Z"
+                    displayName: ""
+                    state: "active"
+                    turnCount: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /conversations/{conversationId}/chat:
+    post:
+      tags:
+        - Chat
+      summary: Send a message (synchronous)
+      description: |
+        Sends a message to an existing conversation and receives a complete response.
+        The response includes the full conversation history including all previous messages.
+        
+        Use this endpoint when you need the complete response immediately, such as for 
+        batch processing or when streaming is not required.
+      operationId: chat
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+            examples:
+              simpleMessage:
+                summary: Simple message
+                value:
+                  message: "What is the weather like in Stockholm?"
+                  product: "Ixx/1.0"
+              messageWithContext:
+                summary: Message with additional context
+                value:
+                  message: "Is this temperature reading normal?"
+                  additionalContext:
+                    - text: "Current temperature: 42°C"
+                      description: "Sensor reading"
+                    - text: "Normal operating range: 20-35°C"
+                      description: "Device specifications"
+                  product: "Ixx/1.0"
+      responses:
+        '200':
+          description: Message sent successfully, response received
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationWithMessages'
+              examples:
+                chatResponse:
+                  value:
+                    id: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+                    createdDateTime: "2025-10-29T10:00:00.000Z"
+                    displayName: "Weather in Stockholm"
+                    state: "active"
+                    turnCount: 1
+                    messages:
+                      - id: "cc211f56-1a5e-0af0-fec2-c354ce468b95"
+                        text: "What is the weather like in Stockholm?"
+                        createdDateTime: "2025-10-29T10:05:00.000Z"
+                      - id: "3fe6b260-c682-4f8e-a201-022ccb300742"
+                        text: "The weather in Stockholm is sunny with a temperature of 15°C."
+                        createdDateTime: "2025-10-29T10:05:05.000Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /conversations/{conversationId}/chatOverStream:
+    post:
+      tags:
+        - Chat
+      summary: Send a message (streaming)
+      description: |
+        Sends a message to an existing conversation and receives a streamed response 
+        via Server-Sent Events (SSE).
+        
+        The response is delivered incrementally as chunks, providing lower perceived 
+        latency and a better user experience for interactive applications.
+        
+        ## Stream Events
+        - `data` events: Contains message chunks (default event type)
+        - `end` event: Signals completion (empty messages array)
+        - `keepalive` event: Heartbeat to prevent connection timeout
+        - `error` event: Error occurred during streaming
+        
+        ## Client Implementation
+        Clients must concatenate the `text` fields from successive chunks to assemble 
+        the complete message. The stream concludes with an `event: end`.
+      operationId: chatOverStream
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Stream established successfully
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Server-Sent Events stream with JSON payloads.
+                  
+                  Each event contains a JSON object with conversation ID and message chunks.
+                  Clients should parse each `data:` line as JSON and concatenate the text fields.
+              examples:
+                streamResponse:
+                  summary: Example SSE stream
+                  value: |
+                    data: {
+                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "messages": [
+                        {
+                          "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+                          "text": "The weather in Stockholm is sunny",
+                          "createdDateTime": "2025-10-29T10:05:05.000Z"
+                        }
+                      ]
+                    }
+
+                    data: {
+                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "messages": [
+                        {
+                          "id": "3fe6b260-c682-4f8e-a201-022ccb300742",
+                          "text": " with a temperature of 15°C.",
+                          "createdDateTime": "2025-10-29T10:05:05.000Z"
+                        }
+                      ]
+                    }
+
+                    event: end
+                    data: {
+                      "id": "0d110e7e-2b7e-4270-a899-fd2af6fde333",
+                      "messages": []
+                    }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Azure Entra ID or Azure AD B2C access token.
+        
+        Obtain a token using OAuth 2.0 flows and include it in the Authorization header.
+        
+        Required scopes:
+        - `api://irma/chat.read` - Read access to chat conversations
+        - `api://irma/chat.write` - Create and send messages in conversations
+
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      description: The unique identifier of the conversation (from create conversation response)
+      schema:
+        type: string
+        format: uuid
+      example: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+
+  schemas:
+    Conversation:
+      type: object
+      description: Represents a chat conversation with Irma
+      required:
+        - id
+        - createdDateTime
+        - displayName
+        - state
+        - turnCount
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The unique identifier for the conversation
+          example: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+        createdDateTime:
+          type: string
+          format: date-time
+          description: The date and time the conversation was created, in UTC (ISO 8601 format)
+          example: "2025-10-29T10:00:00.000Z"
+        displayName:
+          type: string
+          description: |
+            The display name of the conversation. 
+            Empty on creation; auto-generated from the first user message.
+          example: "Weather in Stockholm"
+        state:
+          type: string
+          enum:
+            - active
+            - disengagedForRai
+          description: |
+            The state of the conversation.
+            - `active`: Conversation is active and can receive new messages
+            - `disengagedForRai`: Conversation stopped due to Responsible AI policy violations
+          example: "active"
+        turnCount:
+          type: integer
+          format: int32
+          description: The number of turns (message exchanges) in the conversation
+          example: 1
+          minimum: 0
+
+    ConversationWithMessages:
+      allOf:
+        - $ref: '#/components/schemas/Conversation'
+        - type: object
+          required:
+            - messages
+          properties:
+            messages:
+              type: array
+              description: Array of messages in the conversation (full history)
+              items:
+                $ref: '#/components/schemas/Message'
+
+    Message:
+      type: object
+      description: Represents a single message in a conversation
+      required:
+        - id
+        - text
+        - createdDateTime
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The unique identifier for the message
+          example: "cc211f56-1a5e-0af0-fec2-c354ce468b95"
+        text:
+          type: string
+          description: The content of the message
+          example: "What is the weather like in Stockholm?"
+        createdDateTime:
+          type: string
+          format: date-time
+          description: The date and time the message was created, in UTC (ISO 8601 format)
+          example: "2025-10-29T10:05:00.000Z"
+
+    ChatRequest:
+      type: object
+      description: Request payload for sending a chat message
+      required:
+        - message
+        - product
+      properties:
+        message:
+          type: string
+          description: The chat message to send to Irma
+          example: "What is the weather like in Stockholm?"
+          minLength: 1
+        additionalContext:
+          type: array
+          description: |
+            Additional context messages to help Irma provide more accurate responses.
+            Each context message contains text and an optional description.
+          items:
+            $ref: '#/components/schemas/ContextMessage'
+          example:
+            - text: "Current temperature: 42°C"
+              description: "Sensor reading"
+            - text: "Normal operating range: 20-35°C"
+              description: "Device specifications"
+        product:
+          type: string
+          description: |
+            A slash-separated string identifying the product model and version.
+            Format: `<ProductName>/<Version>`
+            
+            Examples:
+            - `Ixx/1.0` - Ixx camera, version 1.0
+            - `Ixx-Pro/2.5` - Ixx Pro camera, version 2.5
+            - `SensorX/1.2` - SensorX device, version 1.2
+          example: "Ixx/1.0"
+          pattern: '^[^/]+/[^/]+$'
+
+    ContextMessage:
+      type: object
+      description: Represents additional context for a conversation
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: The contextual information (e.g., sensor readings, configuration data)
+          example: "Current temperature: 42°C, Humidity: 85%"
+          minLength: 1
+        description:
+          type: string
+          description: Optional description of what this context represents
+          example: "Environmental sensor readings"
+
+    StreamEvent:
+      type: object
+      description: A single Server-Sent Event in the stream
+      required:
+        - id
+        - messages
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The unique identifier for the conversation
+          example: "0d110e7e-2b7e-4270-a899-fd2af6fde333"
+        messages:
+          type: array
+          description: Array of message chunks (empty for end event)
+          items:
+            $ref: '#/components/schemas/Message'
+
+    Error:
+      type: object
+      description: Standard error response
+      required:
+        - code
+        - message
+        - traceId
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "InvalidRequest"
+          enum:
+            - InvalidRequest
+            - MissingField
+            - Unauthorized
+            - Forbidden
+            - NotFound
+            - Conflict
+            - InternalError
+        message:
+          type: string
+          description: Human-readable error description
+          example: "The 'message' field is required."
+        target:
+          type: string
+          description: Optional pointer to the field or resource that caused the error
+          example: "message"
+        details:
+          type: array
+          description: Optional list of structured error details for compound failures
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+                description: Machine-readable error code for this detail
+                example: "MissingField"
+              message:
+                type: string
+                description: Human-readable error description
+                example: "Provide a non-empty string."
+              target:
+                type: string
+                description: Field or resource that caused this error
+                example: "message"
+        traceId:
+          type: string
+          description: |
+            Correlation identifier for support and observability.
+            Include this when contacting Irma support for troubleshooting.
+          example: "00-4d7b42a3f9c1c24baa7231e4ff0d1b61-7e12a2f4b4de924b-01"
+
+  responses:
+    BadRequest:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missingField:
+              summary: Missing required field
+              value:
+                code: "InvalidRequest"
+                message: "The 'message' field is required."
+                target: "message"
+                details:
+                  - code: "MissingField"
+                    message: "Provide a non-empty string."
+                    target: "message"
+                traceId: "00-4d7b42a3f9c1c24baa7231e4ff0d1b61-7e12a2f4b4de924b-01"
+            invalidFormat:
+              summary: Invalid product format
+              value:
+                code: "InvalidRequest"
+                message: "The 'product' field must follow the format: ProductName/Version"
+                target: "product"
+                traceId: "00-5e2c53b4a0d2d35cbb8342f5gg1e2c72-8f23b3g5c5ef035c-02"
+
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "Unauthorized"
+            message: "Invalid or expired authentication token."
+            traceId: "00-6f3d64c5b1e3e46dcc9453g6hh2f3d83-9g34c4h6d6fg146d-03"
+
+    Forbidden:
+      description: Authenticated but not authorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "Forbidden"
+            message: "Token lacks required scopes: api://irma/chat.write"
+            traceId: "00-7g4e75d6c2f4f57edd0564h7ii3g4e94-0h45d5i7e7gh257e-04"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "NotFound"
+            message: "Conversation '0d110e7e-2b7e-4270-a899-fd2af6fde333' not found."
+            target: "conversationId"
+            traceId: "00-8h5f86e7d3g5g68fee1675i8jj4h5f05-1i56e6j8f8hi368f-05"
+
+    Conflict:
+      description: Request conflicts with current state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "Conflict"
+            message: "Cannot send message to conversation in 'disengagedForRai' state."
+            target: "conversationId"
+            traceId: "00-9i6g97f8e4h6h79gff2786j9kk5i6g16-2j67f7k9g9ij479g-06"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "InternalError"
+            message: "An unexpected error occurred. Please try again later."
+            traceId: "00-0j7h08g9f5i7i80hgg3897k0ll6j7h27-3k78g8l0h0jk580h-07"

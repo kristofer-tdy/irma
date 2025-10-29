@@ -7,6 +7,7 @@ These directions apply to GitHub Copilot and any AI agent working in this reposi
 - Keep solutions simple; follow existing patterns and only add complexity when justified.
 - Prefer built-in tools and CLIs to modify project assets (e.g., use `git` for repository changes, `dotnet` for project files) instead of manual edits when those tools exist.
 - Work in small, reviewable steps and highlight open risks or follow-ups.
+- Run `dotnet build` and `dotnet test` before declaring work complete, unless explicitly told otherwise; never leave unverified builds or tests for the user.
 
 ## Code
 - Primary stack: .NET Framework with C#. Match the current formatting, naming, and idioms.
@@ -20,4 +21,3 @@ These directions apply to GitHub Copilot and any AI agent working in this reposi
 - Default to TDD: Red → Green → Refactor unless instructed otherwise.
 - Cover new logic with unit tests that include positive, negative, and edge scenarios; name tests descriptively.
 - Use mocks to isolate external dependencies. Make tests fail first before writing the implementation and show that progression to the user when possible.
-- Run `dotnet build` and `dotnet test` before declaring work complete, unless explicitly told otherwise; never leave unverified builds or tests for the user.

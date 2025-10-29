@@ -18,4 +18,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Flir.Irma.WebApi\Flir.Irma.WebApi.csproj" />
+  </ItemGroup>
+
 </Project>

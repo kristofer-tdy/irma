@@ -2,7 +2,7 @@
 
 This document consolidates the previous `API-and-Azure-AI-Foundry.md` and `REST-API-doc.md` guides. It specifies the REST API for the Irma backend and explains how the service integrates with the agent system hosted in Azure AI Foundry. The API is heavily inspired by the Microsoft 365 Copilot Chat API and provides functionality for creating and managing chat conversations with Irma, an intelligent assistant that can answer questions about your connected devices.
 
-The single point of truth of how the API is and should be implemented can be found in the `REST-API-spec.yaml` file that has the OpenAPI/Swagger specification. These two files should stay in sync; if they diverge, the specification is authoritative.
+The single point of truth of how the API is and should be implemented can be found in the `REST-API-spec.yaml` file that has the OpenAPI/Swagger specification. These two files should stay in sync; if they diverge, the specification is authoritative. Consumers (including the Irma CLI) should generate REST clients directly from this specification to avoid drift in request/response contracts.
 
 ---
 
@@ -18,6 +18,21 @@ The single point of truth of how the API is and should be implemented can be fou
     - [4.4 Secure State Management and Authorization](#44-secure-state-management-and-authorization)
     - [4.5 Example Chat Workflow](#45-example-chat-workflow)
 5. [API Reference](#5-api-reference)
+    - [5.1 Error Handling](#51-error-handling)
+    - [5.2 Endpoints](#52-endpoints)
+        - [5.2.1 Create Conversation](#521-create-conversation)
+        - [5.2.2 Chat (Synchronous)](#522-chat-synchronous)
+        - [5.2.3 Chat Over Stream (SSE)](#523-chat-over-stream-sse)
+        - [5.2.4 Health Check](#524-health-check)
+        - [5.2.5 Server Version](#525-server-version)
+    - [5.3 Data Models](#53-data-models)
+        - [5.3.1 Conversation](#531-conversation)
+        - [5.3.2 Message](#532-message)
+        - [5.3.3 Context Message](#533-context-message)
+        - [5.3.4 Error](#534-error)
+        - [5.3.5 Health Status](#535-health-status)
+        - [5.3.6 Dependency Health](#536-dependency-health)
+        - [5.3.7 Version Info](#537-version-info)
 6. [Best Practices](#6-best-practices)
 7. [Appendix](#7-appendix)
 
@@ -91,7 +106,7 @@ This is the recommended way to explore the API's capabilities and is always in s
 
 All requests to the Irma API must be authenticated using a bearer token in the `Authorization` header.
 
-```
+```http
 Authorization: Bearer {token}
 ```
 
@@ -212,10 +227,10 @@ The **product** field is a required parameter that identifies the device model a
 
 The `additionalContext` parameter allows you to provide extra information to help Irma answer more accurately. It's an **array** of context messages, where each message contains:
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `text` | String | The contextual information (e.g., sensor readings, configuration data) |
-| `description` | String | Optional description of what this context represents |
+| Property    | Type   | Description                                                          |
+| ----------- | ------ | -------------------------------------------------------------------- |
+| `text`      | String | The contextual information (e.g., sensor readings, configuration data) |
+| `description` | String | Optional description of what this context represents                 |
 
 **Example:**
 
@@ -240,9 +255,9 @@ The `additionalContext` parameter allows you to provide extra information to hel
 
 Conversations can be in one of the following states:
 
-| State | Description |
-| --- | --- |
-| `active` | Conversation is active and can receive new messages |
+| State              | Description                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `active`           | Conversation is active and can receive new messages                                                                    |
 | `disengagedForRai` | Conversation has been stopped due to Responsible AI policy violations (e.g., harmful content, policy violations) |
 
 **Note:** Once a conversation enters `disengagedForRai` state, no further messages can be sent. Create a new conversation to continue.
@@ -434,14 +449,14 @@ public async Task ChatOverStream(string conversationId, [FromBody] ChatRequest r
 
 #### Synchronous vs. Streaming: Same Agent, Different Modes
 
-| Aspect | `/chat` (Synchronous) | `/chatOverStream` (Streaming) |
-|--------|----------------------|------------------------------|
-| Agent Call | Same agent, `stream: false` | Same agent, `stream: true` |
-| API Behavior | Waits for complete response | Forwards chunks immediately |
-| Response Format | Single JSON object | Server-Sent Events (SSE) |
-| Client Perception | Higher latency, all-at-once | Lower latency, progressive |
-| Use Case | Batch processing, simple UIs | Interactive chat, real-time UIs |
-| Memory Usage | Must buffer full response | Minimal buffering |
+| Aspect          | `/chat` (Synchronous)         | `/chatOverStream` (Streaming) |
+| --------------- | ----------------------------- | ----------------------------- |
+| Agent Call      | Same agent, `stream: false`   | Same agent, `stream: true`    |
+| API Behavior    | Waits for complete response   | Forwards chunks immediately   |
+| Response Format | Single JSON object            | Server-Sent Events (SSE)      |
+| Client Perception | Higher latency, all-at-once   | Lower latency, progressive    |
+| Use Case        | Batch processing, simple UIs  | Interactive chat, real-time UIs |
+| Memory Usage    | Must buffer full response     | Minimal buffering             |
 
 #### Error Handling in Streaming
 
@@ -478,39 +493,39 @@ This section describes the high-level logic for each REST API endpoint.
 
 This endpoint initiates a new chat session.
 
-1.  **Authentication/Authorization**: Validate the incoming JWT bearer token. The token must be valid and contain the `api://irma/chat.write` scope.
-2.  **Create Conversation State**:
-    -   The API generates a new, unique `conversationId` (UUID).
-    -   It calls the AI Foundry to create a new "thread" and receives a `FoundryThreadId`.
-    -   It persists a new record in the Conversation Store, mapping the `conversationId`, `FoundryThreadId`, and the user's `UserId` (from the JWT).
-3.  **Response**: Return a `201 Created` response with the newly created `Conversation` object, including the `conversationId`.
+1. **Authentication/Authorization**: Validate the incoming JWT bearer token. The token must be valid and contain the `api://irma/chat.write` scope.
+2. **Create Conversation State**:
+   - The API generates a new, unique `conversationId` (UUID).
+   - It calls the AI Foundry to create a new "thread" and receives a `FoundryThreadId`.
+   - It persists a new record in the Conversation Store, mapping the `conversationId`, `FoundryThreadId`, and the user's `UserId` (from the JWT).
+3. **Response**: Return a `201 Created` response with the newly created `Conversation` object, including the `conversationId`.
 
 #### `POST /conversations/{conversationId}/chat` (Synchronous)
 
 This endpoint sends a message in an existing conversation.
 
-1.  **Authentication/Authorization**: Validate the JWT and required `api://irma/chat.write` scope.
-2.  **State Retrieval and Validation**:
-    -   Retrieve the conversation record from the Conversation Store using the `conversationId`.
-    -   **Security Check**: Verify that the `UserId` from the store matches the `UserId` from the current JWT. If not, return `404 Not Found`.
-    -   Retrieve the corresponding `FoundryThreadId`.
-3.  **Call AI Foundry**:
-    -   Construct a request to the **Routing Agent** in Azure AI Foundry, including the `FoundryThreadId`.
-4.  **Response Handling**:
-    -   Await the complete response from the AI Foundry.
-    -   Update state (e.g., `turnCount`) and format the response.
-    -   Return a `200 OK` with the JSON payload.
+1. **Authentication/Authorization**: Validate the JWT and required `api://irma/chat.write` scope.
+2. **State Retrieval and Validation**:
+   - Retrieve the conversation record from the Conversation Store using the `conversationId`.
+   - **Security Check**: Verify that the `UserId` from the store matches the `UserId` from the current JWT. If not, return `404 Not Found`.
+   - Retrieve the corresponding `FoundryThreadId`.
+3. **Call AI Foundry**:
+   - Construct a request to the **Routing Agent** in Azure AI Foundry, including the `FoundryThreadId`.
+4. **Response Handling**:
+   - Await the complete response from the AI Foundry.
+   - Update state (e.g., `turnCount`) and format the response.
+   - Return a `200 OK` with the JSON payload.
 
 #### `POST /conversations/{conversationId}/chatOverStream` (Streaming)
 
 This endpoint sends a message and streams the response in real-time.
 
-1.  **Authentication and Validation**: Same as the synchronous endpoint, including the critical security check to match the `UserId`.
-2.  **Establish SSE Connection**: Set the response `Content-Type` to `text/event-stream`.
-3.  **Call AI Foundry (Streaming)**:
-    -   Make a streaming call to the **Routing Agent** with `stream: true`, using the `FoundryThreadId`.
-4.  **Stream Processing and Real-Time Forwarding**:
-    -   The API acts as a non-buffering proxy, immediately forwarding data chunks from the agent to the client, wrapped in the SSE format.
+1. **Authentication and Validation**: Same as the synchronous endpoint, including the critical security check to match the `UserId`.
+2. **Establish SSE Connection**: Set the response `Content-Type` to `text/event-stream`.
+3. **Call AI Foundry (Streaming)**:
+   - Make a streaming call to the **Routing Agent** with `stream: true`, using the `FoundryThreadId`.
+4. **Stream Processing and Real-Time Forwarding**:
+   - The API acts as a non-buffering proxy, immediately forwarding data chunks from the agent to the client, wrapped in the SSE format.
 
 ### 4.4 Secure State Management and Authorization
 
@@ -534,13 +549,13 @@ To ensure flexibility, the Conversation Store is implemented behind an interface
 **Data Model:**
 The store will maintain a simple record for each conversation with the following schema:
 
-| Column | Type | Description |
-| --- | --- | --- |
-| `ConversationId` (PK) | `string` (UUID) | The public, unique identifier for the conversation. |
-| `FoundryThreadId` | `string` | The internal identifier for the corresponding thread in Azure AI Foundry. |
-| `UserId` | `string` | The stable, unique identifier for the user (from the JWT `sub` or `oid` claim). |
-| `CreatedDateTime` | `datetime` | Timestamp of when the conversation was created. |
-| `State` | `string` | The current state of the conversation (e.g., `active`). |
+| Column                | Type       | Description                                                                    |
+| --------------------- | ---------- | ------------------------------------------------------------------------------ |
+| `ConversationId` (PK) | `string` (UUID) | The public, unique identifier for the conversation.                            |
+| `FoundryThreadId`     | `string`   | The internal identifier for the corresponding thread in Azure AI Foundry.      |
+| `UserId`              | `string`   | The stable, unique identifier for the user (from the JWT `sub` or `oid` claim). |
+| `CreatedDateTime`     | `datetime` | Timestamp of when the conversation was created.                                |
+| `State`               | `string`   | The current state of the conversation (e.g., `active`).                        |
 
 #### 4.4.3 Technology Choice: Azure SQL over Alternatives
 
@@ -555,17 +570,19 @@ The store will maintain a simple record for each conversation with the following
 
 This flow is executed on **every** request to an existing conversation (e.g., `POST /conversations/{conversationId}/chat`).
 
-1.  **Authenticate:** The API validates the incoming JWT bearer token.
-2.  **Extract `UserId`:** A stable user identifier (e.g., the `oid` claim) is extracted from the validated token.
-3.  **Lookup Conversation:** The API queries the Conversation Store using the `conversationId` from the URL.
-    ```sql
-    SELECT FoundryThreadId, UserId FROM Conversations WHERE ConversationId = @conversationId
-    ```
-4.  **Authorize:**
-    - **If no record is found:** The `conversationId` is invalid. The API **must** return an `HTTP 404 Not Found` response.
-    - **If a record is found:** The API **must** compare the `UserId` from the database record with the `UserId` extracted from the token.
-        - **If they match:** The user is authorized. The request proceeds using the retrieved `FoundryThreadId`.
-        - **If they do not match:** This is an authorization failure. The API **must** return an `HTTP 404 Not Found` to avoid revealing that the conversation ID is valid but belongs to another user.
+1. **Authenticate:** The API validates the incoming JWT bearer token.
+2. **Extract `UserId`:** A stable user identifier (e.g., the `oid` claim) is extracted from the validated token.
+3. **Lookup Conversation:** The API queries the Conversation Store using the `conversationId` from the URL.
+
+   ```sql
+   SELECT FoundryThreadId, UserId FROM Conversations WHERE ConversationId = @conversationId
+   ```
+
+4. **Authorize:**
+   - **If no record is found:** The `conversationId` is invalid. The API **must** return an `HTTP 404 Not Found` response.
+   - **If a record is found:** The API **must** compare the `UserId` from the database record with the `UserId` extracted from the token.
+     - **If they match:** The user is authorized. The request proceeds using the retrieved `FoundryThreadId`.
+     - **If they do not match:** This is an authorization failure. The API **must** return an `HTTP 404 Not Found` to avoid revealing that the conversation ID is valid but belongs to another user.
 
 This ensures that even if a `conversationId` is leaked, it is useless without a valid JWT for the user who created it.
 
@@ -607,34 +624,34 @@ The user opens their device app and wants to start a chat.
 
 1. **Device App -> Irma API**: The app sends a request to create a conversation.
 
-    ```http
-    POST /v1/irma/conversations HTTP/1.1
-    Host: api.irma.example.com
-    Authorization: Bearer {jwt_for_user_A}
-    Content-Type: application/json
+   ```http
+   POST /v1/irma/conversations HTTP/1.1
+   Host: api.irma.example.com
+   Authorization: Bearer {jwt_for_user_A}
+   Content-Type: application/json
 
-    {}
-    ```
+   {}
+   ```
 
 2. **Irma API (Internal Logic)**:
-    - Validates the JWT for User A and extracts `user_A_id`.
-    - Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
-    - Generates a new `conversationId`: `conv-abc-456`.
-    - Stores the mapping in the Conversation Store: `(conv-abc-456, foundry-thread-123, user_A_id)`.
+   - Validates the JWT for User A and extracts `user_A_id`.
+   - Calls the AI Foundry to create a new thread, receiving `foundry-thread-123` back.
+   - Generates a new `conversationId`: `conv-abc-456`.
+   - Stores the mapping in the Conversation Store: `(conv-abc-456, foundry-thread-123, user_A_id)`.
 
 3. **Irma API -> Device App**: The API returns the new conversation details.
 
-    ```http
-    HTTP/1.1 201 Created
-    Content-Type: application/json
+   ```http
+   HTTP/1.1 201 Created
+   Content-Type: application/json
 
-    {
-      "conversationId": "conv-abc-456",
-      "createdDateTime": "2025-10-29T10:00:00.000Z",
-      "state": "active",
-      "turnCount": 0
-    }
-    ```
+   {
+     "conversationId": "conv-abc-456",
+     "createdDateTime": "2025-10-29T10:00:00.000Z",
+     "state": "active",
+     "turnCount": 0
+   }
+   ```
 
 #### Step 2: User Sends a Message
 
@@ -642,52 +659,52 @@ The user asks a question about their "Ixx/1.0" camera.
 
 1. **Device App -> Irma API**: The app sends the message to the chat endpoint using the `conversationId`.
 
-    ```http
-    POST /v1/irma/conversations/conv-abc-456/chat HTTP/1.1
-    Host: api.irma.example.com
-    Authorization: Bearer {jwt_for_user_A}
-    Content-Type: application/json
+   ```http
+   POST /v1/irma/conversations/conv-abc-456/chat HTTP/1.1
+   Host: api.irma.example.com
+   Authorization: Bearer {jwt_for_user_A}
+   Content-Type: application/json
 
-    {
-      "message": "Is the temperature reading normal?",
-      "additionalContext": [
-        { "text": "Current temperature: 42°C" }
-      ],
-      "product": "Ixx/1.0"
-    }
-    ```
+   {
+     "message": "Is the temperature reading normal?",
+     "additionalContext": [
+       { "text": "Current temperature: 42°C" }
+     ],
+     "product": "Ixx/1.0"
+   }
+   ```
 
 2. **Irma API (Internal Logic)**:
-    - Validates the JWT for User A and extracts `user_A_id`.
-    - Looks up `conv-abc-456` in the Conversation Store.
-    - It finds the record and confirms the owner is `user_A_id`, which matches the token.
-    - It retrieves the `FoundryThreadId`: `foundry-thread-123`.
-    - It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
+   - Validates the JWT for User A and extracts `user_A_id`.
+   - Looks up `conv-abc-456` in the Conversation Store.
+   - It finds the record and confirms the owner is `user_A_id`, which matches the token.
+   - It retrieves the `FoundryThreadId`: `foundry-thread-123`.
+   - It calls the AI Foundry's Routing Agent, passing the thread ID, message, context, and product metadata.
 
 3. **AI Foundry (Internal Logic)**:
-    - The Routing Agent receives the request for `foundry-thread-123`.
-    - It inspects the metadata and sees `"product": "Ixx/1.0"`.
-    - It routes the request to the **Ixx Product Agent**.
-    - The Ixx agent processes the question ("Is 42°C normal?") and generates a response.
+   - The Routing Agent receives the request for `foundry-thread-123`.
+   - It inspects the metadata and sees `"product": "Ixx/1.0"`.
+   - It routes the request to the **Ixx Product Agent**.
+   - The Ixx agent processes the question ("Is 42°C normal?") and generates a response.
 
 4. **AI Foundry -> Irma API**: The Foundry returns the complete response text: "A temperature of 42°C is above the normal operating range of 20-35°C. You should check the device for proper ventilation."
 
 5. **Irma API -> Device App**: The API formats the final response and sends it back.
 
-    ```http
-    HTTP/1.1 200 OK
-    Content-Type: application/json
+   ```http
+   HTTP/1.1 200 OK
+   Content-Type: application/json
 
-    {
-      "conversationId": "conv-abc-456",
-      "turnCount": 1,
-      "messages": [
-        { "messageId": "msg-1", "text": "Is the temperature reading normal?", ... },
-        { "messageId": "msg-2", "text": "A temperature of 42°C is above the normal operating range...", ... }
-      ],
-      ...
-    }
-    ```
+   {
+     "conversationId": "conv-abc-456",
+     "turnCount": 1,
+     "messages": [
+       { "messageId": "msg-1", "text": "Is the temperature reading normal?", ... },
+       { "messageId": "msg-2", "text": "A temperature of 42°C is above the normal operating range...", ... }
+     ],
+     ...
+   }
+   ```
 
 #### Step 3: Conversation Ends
 
@@ -707,14 +724,14 @@ Irma uses a consistent error envelope across all endpoints. Clients should inspe
 
 #### Common Status Codes
 
-| Status | Meaning | Typical Causes |
-| --- | --- | --- |
-| `400 Bad Request` | The request payload is invalid. | Missing required fields, malformed JSON, unsupported values. |
-| `401 Unauthorized` | Authentication failed. | Missing/expired token, invalid token. |
-| `403 Forbidden` | Authenticated but authorized. | Token lacks required scopes/claims. |
-| `404 Not Found` | Resource does not exist. | Unknown `conversationId`. |
-| `409 Conflict` | Request conflicts with current state. | Attempting to message a disengaged conversation, or the conversation context has expired. |
-| `500 Internal Server Error` | Unexpected server-side failure. | Transient backend issues. |
+| Status                  | Meaning                               | Typical Causes                                                                         |
+| ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------- |
+| `400 Bad Request`       | The request payload is invalid.       | Missing required fields, malformed JSON, unsupported values.                           |
+| `401 Unauthorized`      | Authentication failed.                | Missing/expired token, invalid token.                                                  |
+| `403 Forbidden`         | Authenticated but not authorized.     | Token lacks required scopes/claims.                                                    |
+| `404 Not Found`         | Resource does not exist.              | Unknown `conversationId`.                                                              |
+| `409 Conflict`          | Request conflicts with current state. | Attempting to message a disengaged conversation, or the conversation context has expired. |
+| `500 Internal Server Error` | Unexpected server-side failure.       | Transient backend issues.                                                              |
 
 #### Error Response Body
 
@@ -734,12 +751,12 @@ Irma uses a consistent error envelope across all endpoints. Clients should inspe
 }
 ```
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `code` | String | Machine-readable error code (e.g., `InvalidRequest`, `Unauthorized`, `NotFound`). |
-| `message` | String | Human-readable description suitable for logging and debugging. |
-| `target` | String | Optional pointer to the field or resource that caused the error. |
-| `details` | Array | Optional list of structured error details for compound failures. |
+| Property  | Type  | Description                                                              |
+| --------- | ----- | ------------------------------------------------------------------------ |
+| `code`    | String | Machine-readable error code (e.g., `InvalidRequest`, `Unauthorized`, `NotFound`). |
+| `message` | String | Human-readable description suitable for logging and debugging.           |
+| `target`  | String | Optional pointer to the field or resource that caused the error.         |
+| `details` | Array | Optional list of structured error details for compound failures.         |
 | `traceId` | String | Correlation identifier for support and observability. **Include this when contacting Irma support.** |
 
 #### Error Handling During Streaming
@@ -777,10 +794,10 @@ Creates a new conversation with Irma.
 
 **Request Headers:**
 
-| Header | Value | Required |
-| --- | --- | --- |
-| `Authorization` | `Bearer {token}` | Yes |
-| `Content-Type` | `application/json` | Yes |
+| Header          | Value              | Required |
+| --------------- | ------------------ | -------- |
+| `Authorization` | `Bearer {token}`   | Yes      |
+| `Content-Type`  | `application/json` | Yes      |
 
 **Request Body:**
 
@@ -794,13 +811,13 @@ The request body should be an empty JSON object.
 
 If successful, this method returns a `201 Created` response code and a JSON object in the response body with the following properties:
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `conversationId` | String | The unique identifier for the conversation. Use this in subsequent chat requests. |
-| `createdDateTime` | String | The date and time the conversation was created, in UTC (ISO 8601 format). |
-| `displayName` | String | The display name of the conversation. Empty on creation; auto-generated from first message. |
-| `state` | String | The state of the conversation (`active`, `disengagedForRai`). |
-| `turnCount` | Integer | The number of turns in the conversation. Initially `0`. |
+| Property          | Type    | Description                                                                          |
+| ----------------- | ------- | ------------------------------------------------------------------------------------ |
+| `conversationId`  | String  | The unique identifier for the conversation. Use this in subsequent chat requests.    |
+| `createdDateTime` | String  | The date and time the conversation was created, in UTC (ISO 8601 format).            |
+| `displayName`     | String  | The display name of the conversation. Empty on creation; auto-generated from first message. |
+| `state`           | String  | The state of the conversation (`active`, `disengagedForRai`).                        |
+| `turnCount`       | Integer | The number of turns in the conversation. Initially `0`.                                |
 
 **Error Responses:**
 
@@ -845,53 +862,53 @@ Sends a message in an existing conversation and receives a complete response.
 
 **Path Parameters:**
 
-| Parameter | Type | Description |
-| --- | --- | --- |
+| Parameter        | Type   | Description                                                        |
+| ---------------- | ------ | ------------------------------------------------------------------ |
 | `conversationId` | String | The unique identifier of the conversation (from create conversation response). |
 
 **Request Headers:**
 
-| Header | Value | Required |
-| --- | --- | --- |
-| `Authorization` | `Bearer {token}` | Yes |
-| `Content-Type` | `application/json` | Yes |
+| Header          | Value              | Required |
+| --------------- | ------------------ | -------- |
+| `Authorization` | `Bearer {token}`   | Yes      |
+| `Content-Type`  | `application/json` | Yes      |
 
 **Request Body:**
 
-| Property | Type | Description | Required |
-| --- | --- | --- | --- |
-| `message` | String | The chat message to send to Irma. Cannot be empty. | Yes |
-| `additionalContext` | Array | Additional context messages. See [Additional Context](#34-additional-context). | No |
-| `product` | String | A slash-separated string identifying the product and version (e.g., "Ixx/1.0"). | Yes |
+| Property          | Type  | Description                                                                          | Required |
+| ----------------- | ----- | ------------------------------------------------------------------------------------ | -------- |
+| `message`         | String | The chat message to send to Irma. Cannot be empty.                                   | Yes      |
+| `additionalContext` | Array | Additional context messages. See [Additional Context](#34-additional-context).       | No       |
+| `product`         | String | A slash-separated string identifying the product and version (e.g., "Ixx/1.0"). | Yes      |
 
 **Additional Context Schema:**
 
 Each item in the `additionalContext` array should have:
 
-| Property | Type | Description | Required |
-| --- | --- | --- | --- |
-| `text` | String | The contextual information. | Yes |
-| `description` | String | Description of what this context represents. | No |
+| Property    | Type   | Description                             | Required |
+| ----------- | ------ | --------------------------------------- | -------- |
+| `text`      | String | The contextual information.             | Yes      |
+| `description` | String | Description of what this context represents. | No       |
 
 **Response:**
 
 If successful, this method returns a `200 OK` response code and a JSON object with the following properties:
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `conversationId` | String | The unique identifier for the conversation. |
-| `createdDateTime` | String | The date and time the conversation was created, in UTC. |
-| `displayName` | String | The display name of the conversation (auto-generated from first message). |
-| `state` | String | The state of the conversation. |
-| `turnCount` | Integer | The number of turns in the conversation. |
-| `messages` | Array | An array of message objects representing the full conversation history. |
+| Property          | Type    | Description                                                              |
+| ----------------- | ------- | ------------------------------------------------------------------------ |
+| `conversationId`  | String  | The unique identifier for the conversation.                              |
+| `createdDateTime` | String  | The date and time the conversation was created, in UTC.                  |
+| `displayName`     | String  | The display name of the conversation (auto-generated from first message). |
+| `state`           | String  | The state of the conversation.                                           |
+| `turnCount`       | Integer | The number of turns in the conversation.                                 |
+| `messages`        | Array   | An array of message objects representing the full conversation history.  |
 
 **Message Object Schema:**
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `messageId` | String | The unique identifier for the message. |
-| `text` | String | The content of the message. |
+| Property          | Type   | Description                                       |
+| ----------------- | ------ | ------------------------------------------------- |
+| `messageId`       | String | The unique identifier for the message.            |
+| `text`            | String | The content of the message.                       |
 | `createdDateTime` | String | The date and time the message was created, in UTC. |
 
 **Note:** The response includes the **full conversation history** including all previous messages and the latest exchange.
@@ -980,16 +997,16 @@ Sends a message to an existing conversation and receives a streamed response via
 
 **Path Parameters:**
 
-| Parameter | Type | Description |
-| --- | --- | --- |
+| Parameter        | Type   | Description                             |
+| ---------------- | ------ | --------------------------------------- |
 | `conversationId` | String | The unique identifier of the conversation. |
 
 **Request Headers:**
 
-| Header | Value | Required |
-| --- | --- | --- |
-| `Authorization` | `Bearer {token}` | Yes |
-| `Content-Type` | `application/json` | Yes |
+| Header          | Value              | Required |
+| --------------- | ------------------ | -------- |
+| `Authorization` | `Bearer {token}`   | Yes      |
+| `Content-Type`  | `application/json` | Yes      |
 
 **Request Body:**
 
@@ -1010,18 +1027,18 @@ If successful, this method returns a `200 OK` response with a `Content-Type` of 
 
 Each data event contains a JSON object with:
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `conversationId` | String | The unique identifier for the conversation. |
-| `messages` | Array | An array containing one or more message objects with text chunks. |
+| Property         | Type  | Description                                                    |
+| ---------------- | ----- | -------------------------------------------------------------- |
+| `conversationId` | String | The unique identifier for the conversation.                    |
+| `messages`       | Array | An array containing one or more message objects with text chunks. |
 
 **Message Object in Stream:**
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `messageId` | String | The unique identifier for the message (consistent across chunks). |
-| `text` | String | A chunk of the response message content. |
-| `createdDateTime` | String | The date and time the message was created, in UTC. |
+| Property          | Type   | Description                                                  |
+| ----------------- | ------ | ------------------------------------------------------------ |
+| `messageId`       | String | The unique identifier for the message (consistent across chunks). |
+| `text`            | String | A chunk of the response message content.                     |
+| `createdDateTime` | String | The date and time the message was created, in UTC.           |
 
 **Stream Semantics and Framing:**
 
@@ -1120,6 +1137,103 @@ data: {
 
 ```
 
+#### 5.2.4 Health Check
+
+Provides a quick way to verify that the Irma Web API and its dependencies are reachable.
+
+**URL:** `GET /healthz`
+
+**Request Headers:**
+
+| Header          | Value            | Required |
+| --------------- | ---------------- | -------- |
+| `Authorization` | `Bearer {token}` | Yes      |
+
+**Response:**
+
+| Property          | Type    | Description                                                         |
+| ----------------- | ------- | ------------------------------------------------------------------- |
+| `status`          | String  | Aggregate service status (`Healthy`, `Degraded`, `Unhealthy`).      |
+| `uptimeSeconds`   | Integer | Seconds since the service started.                                 |
+| `dependencies`    | Array   | Health results for downstream dependencies (OpenAI, storage, etc). |
+
+**Example:**
+
+```http
+GET https://irma.example.com/v1/irma/healthz
+Authorization: Bearer {token}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "status": "Healthy",
+  "uptimeSeconds": 35241,
+  "dependencies": [
+    {
+      "name": "AzureOpenAI",
+      "status": "Healthy",
+      "latencyMs": 118
+    },
+    {
+      "name": "ConversationStore",
+      "status": "Healthy"
+    }
+  ],
+  "traceId": "00-1df2aa5e4b7c9d2ea1a0473b4079f111-52a3f82c4e9b4628-01"
+}
+```
+
+**Error Responses:**
+
+- `503 Service Unavailable` – At least one critical dependency is unhealthy.
+- `401 Unauthorized` – Token missing or invalid.
+
+#### 5.2.5 Server Version
+
+Returns metadata about the currently deployed Irma Web API build so clients can compare compatibility.
+
+**URL:** `GET /version`
+
+**Request Headers:**
+
+| Header          | Value            | Required |
+| --------------- | ---------------- | -------- |
+| `Authorization` | `Bearer {token}` | Yes      |
+
+**Response:**
+
+| Property        | Type   | Description                                                |
+| --------------- | ------ | ---------------------------------------------------------- |
+| `version`       | String | Semantic API version of the deployment.                    |
+| `commit`        | String | Git commit SHA (short or full) the build is based on.      |
+| `buildDate`     | String | ISO 8601 timestamp when the server image was built.        |
+| `runtime`       | String | Runtime information (e.g., `.NET 8.0.3`).                  |
+| `environment`   | String | Optional slot/environment name (`prod`, `staging`, etc.). |
+
+**Example:**
+
+```http
+GET https://irma.example.com/v1/irma/version
+Authorization: Bearer {token}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "version": "1.4.0",
+  "commit": "9f2c5ad",
+  "buildDate": "2025-01-30T09:45:12Z",
+  "runtime": ".NET 8.0.3",
+  "environment": "staging"
+}
+```
+
+**Error Responses:**
+
+- `401 Unauthorized` – Token missing or invalid.
+- `500 Internal Server Error` – Metadata retrieval failed.
+
 ---
 
 ### 5.3 Data Models
@@ -1178,6 +1292,56 @@ Represents an error response.
     }
   ],
   "traceId": "string"
+}
+```
+
+#### 5.3.5 Health Status
+
+Represents the payload returned by `GET /healthz`.
+
+```json
+{
+  "status": "Healthy",
+  "uptimeSeconds": 35241,
+  "dependencies": [
+    {
+      "name": "AzureOpenAI",
+      "status": "Healthy",
+      "latencyMs": 118
+    },
+    {
+      "name": "ConversationStore",
+      "status": "Healthy"
+    }
+  ],
+  "traceId": "string"
+}
+```
+
+#### 5.3.6 Dependency Health
+
+Describes the health of an individual downstream dependency.
+
+```json
+{
+  "name": "AzureOpenAI",
+  "status": "Healthy",
+  "latencyMs": 118,
+  "message": "string (optional)"
+}
+```
+
+#### 5.3.7 Version Info
+
+Represents the payload returned by `GET /version`.
+
+```json
+{
+  "version": "1.4.0",
+  "commit": "9f2c5ad",
+  "buildDate": "2025-01-30T09:45:12Z",
+  "runtime": ".NET 8.0.3",
+  "environment": "staging"
 }
 ```
 

@@ -22,6 +22,7 @@ The CLI is intended to be language-agnostic from a user perspective. Everything 
 - Binary name: `irma`.
 - Packaging: Native AOT, self-contained for the targeted OS (no global .NET runtime required).
 - Expected operating systems: Windows, macOS, and Linux (x64/arm64 builds as needed).
+- REST client generation: The Irma Web API publishes `docs/REST-API-spec.yaml`; generate strongly typed clients from this OpenAPI document instead of hand-writing HTTP calls.
 - Configuration and cache location: `$HOME/.irma/` (Linux/macOS) or `%USERPROFILE%\.irma\` (Windows). This directory stores login tokens (when allowed), default settings, and session metadata.
 
 ## 4. Authentication with Azure Entra ID B2C
@@ -86,7 +87,7 @@ Irma CLI authenticates against the Irma Web API using Azure Entra ID B2C-issued 
 - **Response handling:**
   - `200 OK` → display status, service version, dependency checks.
   - `>= 500` → show error message from API and include `traceId` when available.
-- **Follow-up:** Ensure the `/healthz` endpoint is documented in `docs/irma-web-api-doc.md` and `docs/REST-API-spec.yaml`.
+- **Documentation:** See `docs/irma-web-api-doc.md` and `docs/REST-API-spec.yaml` for the complete health payload schema.
 
 ### 6.4 `irma defaults` Subcommands
 
@@ -206,13 +207,15 @@ Defaults are cached client-side to reduce required command-line arguments.
 
 ## 11. REST API Mapping
 
+The Irma backend exposes an OpenAPI/Swagger specification at `docs/REST-API-spec.yaml`. Use this as the source for generating REST API clients (e.g., via `dotnet openapi`, NSwag, Autorest) to keep payload contracts in sync with the server.
+
 | CLI Command | HTTP Method & Path | Notes |
 |-------------|--------------------|-------|
 | `irma --help`, `irma help <cmd>` | – | No API usage. |
 | `irma --version` | Optional `GET /v1/irma/version` | Only if server version comparison is desired. |
 | `irma login` | `POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` | Device code or client credentials flow via Azure Entra ID B2C. |
 | `irma logout` | – | Local cache cleanup only. |
-| `irma health` | `GET /v1/irma/healthz` | Update OpenAPI spec to include this endpoint. |
+| `irma health` | `GET /v1/irma/healthz` | See `docs/irma-web-api-doc.md` for payload details. |
 | `irma defaults set/list/clear` | – | Local configuration; no REST calls. |
 | `irma new-conversation` | `POST /v1/irma/conversations` | Creates a new conversation. |
 | `irma ask` (streaming) | `POST /v1/irma/conversations/{conversationId}/chatOverStream` | SSE endpoint; default behavior. |
@@ -222,7 +225,6 @@ Defaults are cached client-side to reduce required command-line arguments.
 
 ## 12. Open Questions and Follow-Ups
 
-- Document `/v1/irma/healthz` in both `docs/irma-web-api-doc.md` and `docs/REST-API-spec.yaml`.
 - Define retention policy for cached transcripts and tokens to align with security guidelines.
 - Confirm whether the CLI should expose a `DELETE /v1/irma/conversations/{id}` command once the API supports it.
 - Decide on default retry/backoff strategy for transient HTTP failures.

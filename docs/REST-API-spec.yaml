@@ -38,8 +38,90 @@ tags:
     description: Create and manage chat conversations with Irma
   - name: Chat
     description: Send messages and receive responses
+  - name: System
+    description: Service health and metadata endpoints
 
 paths:
+  /healthz:
+    get:
+      tags:
+        - System
+      summary: Get service health status
+      description: |
+        Returns the aggregated health of the Irma Web API along with the status of critical dependencies.
+        Clients typically use this endpoint for diagnostics or readiness probes.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is reachable and responded with current status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                healthy:
+                  value:
+                    status: "Healthy"
+                    uptimeSeconds: 35241
+                    dependencies:
+                      - name: "AzureOpenAI"
+                        status: "Healthy"
+                        latencyMs: 118
+                      - name: "ConversationStore"
+                        status: "Healthy"
+                    traceId: "00-1df2aa5e4b7c9d2ea1a0473b4079f111-52a3f82c4e9b4628-01"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: One or more dependencies are unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                degraded:
+                  value:
+                    status: "Degraded"
+                    uptimeSeconds: 35241
+                    dependencies:
+                      - name: "AzureOpenAI"
+                        status: "Healthy"
+                        latencyMs: 118
+                      - name: "ConversationStore"
+                        status: "Unhealthy"
+                        message: "SQL Database unreachable"
+                    traceId: "00-7aa3c9f12a7b4e3fbb3c1d8a2a9c0123-43f79a7a2e2b4c45-01"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /version:
+    get:
+      tags:
+        - System
+      summary: Get server version information
+      description: |
+        Returns build metadata for the currently deployed Irma Web API instance so clients can ensure compatibility.
+      operationId: getVersion
+      responses:
+        '200':
+          description: Version metadata retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
+              examples:
+                version:
+                  value:
+                    version: "1.4.0"
+                    commit: "9f2c5ad"
+                    buildDate: "2025-01-30T09:45:12Z"
+                    runtime: ".NET 8.0.3"
+                    environment: "staging"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /conversations:
     post:
       tags:
@@ -412,6 +494,97 @@ components:
           description: Array of message chunks (empty for end event)
           items:
             $ref: '#/components/schemas/Message'
+
+    HealthStatus:
+      type: object
+      description: Aggregated health status for the Irma Web API
+      required:
+        - status
+        - uptimeSeconds
+        - dependencies
+      properties:
+        status:
+          type: string
+          description: Overall health status of the service
+          enum:
+            - Healthy
+            - Degraded
+            - Unhealthy
+          example: "Healthy"
+        uptimeSeconds:
+          type: integer
+          format: int64
+          description: Number of seconds the service has been running
+          example: 35241
+        dependencies:
+          type: array
+          description: Health information for downstream dependencies
+          items:
+            $ref: '#/components/schemas/DependencyHealth'
+        traceId:
+          type: string
+          description: Correlation identifier for diagnostics
+          example: "00-1df2aa5e4b7c9d2ea1a0473b4079f111-52a3f82c4e9b4628-01"
+
+    DependencyHealth:
+      type: object
+      description: Health status for a dependency used by the Irma Web API
+      required:
+        - name
+        - status
+      properties:
+        name:
+          type: string
+          description: Name of the dependency
+          example: "AzureOpenAI"
+        status:
+          type: string
+          description: Health status of the dependency
+          enum:
+            - Healthy
+            - Degraded
+            - Unhealthy
+          example: "Healthy"
+        latencyMs:
+          type: integer
+          format: int32
+          description: Observed latency in milliseconds (if measured)
+          example: 118
+        message:
+          type: string
+          description: Optional diagnostic message when the dependency is not healthy
+          example: "SQL Database unreachable"
+
+    VersionInfo:
+      type: object
+      description: Version metadata for the deployed Irma Web API
+      required:
+        - version
+        - commit
+        - buildDate
+        - runtime
+      properties:
+        version:
+          type: string
+          description: Semantic version of the deployment
+          example: "1.4.0"
+        commit:
+          type: string
+          description: Git commit identifier the build is based on
+          example: "9f2c5ad"
+        buildDate:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the build was created
+          example: "2025-01-30T09:45:12Z"
+        runtime:
+          type: string
+          description: Runtime information
+          example: ".NET 8.0.3"
+        environment:
+          type: string
+          description: Optional deployment environment label
+          example: "staging"
 
     Error:
       type: object

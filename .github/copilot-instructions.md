@@ -10,7 +10,7 @@ These directions apply to GitHub Copilot and any AI agent working in this reposi
 - Run `dotnet build` and `dotnet test` before declaring work complete, unless explicitly told otherwise; never leave unverified builds or tests for the user.
 
 ## Code
-- Primary stack: .NET Framework with C#. Match the current formatting, naming, and idioms.
+- Primary stack: .NET Framework with C# . Match the current formatting, naming, and idioms.
 - Write clear code; add short comments only when intent is not obvious from the code itself.
 - Use `/docs` for project context. Create or update `/docs/adr` entries when decisions affect architecture.
 - If Remote MCP for Microsoft Docs is available, use it to find relevant information about Microsoft products and services to inform your code and documentation. Can also be used to check for best practices and patterns. Change your code accordingly.

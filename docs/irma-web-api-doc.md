@@ -375,7 +375,7 @@ var responseStream = await agentClient.GetResponseAsync(
 
 When a client calls `/chatOverStream`, the data flows through a real-time pipeline:
 
-```
+```bash
 AI Foundry Agent → (chunk 1) → .NET API → (SSE event 1) → Android Client
                  → (chunk 2) → .NET API → (SSE event 2) → Android Client
                  → (chunk 3) → .NET API → (SSE event 3) → Android Client

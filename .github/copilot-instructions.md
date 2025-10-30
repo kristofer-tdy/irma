@@ -5,7 +5,9 @@ These directions apply to GitHub Copilot and any AI agent working in this reposi
 ## Always
 - Read the user prompt carefully, ask when requirements are unclear, and confirm assumptions.
 - Keep solutions simple; follow existing patterns and only add complexity when justified.
+- Never implement custom solutions when an official Microsoft-supported package covers the requirement. Prefer that package, or ask for confirmation before deviating.
 - Prefer built-in tools and CLIs to modify project assets (e.g., use `git` for repository changes, `dotnet` for project files) instead of manual edits when those tools exist.
+- For .NET and C#, do not directly edit `.csproj` or `.sln` files without explicit user approval. Use the `dotnet` CLI to make changes (e.g., `dotnet add package`, `dotnet remove package`, `dotnet add reference`, `dotnet sln add/remove`, `dotnet new`). Using `dotnet` for these edits is allowed without asking; manual file edits require asking the user first.
 - Work in small, reviewable steps and highlight open risks or follow-ups.
 - Run `dotnet build` and `dotnet test` before declaring work complete, unless explicitly told otherwise; never leave unverified builds or tests for the user.
 

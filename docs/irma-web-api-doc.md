@@ -2,7 +2,7 @@
 
 This document consolidates the previous `API-and-Azure-AI-Foundry.md` and `REST-API-doc.md` guides. It specifies the REST API for the Irma backend and explains how the service integrates with the agent system hosted in Azure AI Foundry. The API is heavily inspired by the Microsoft 365 Copilot Chat API and provides functionality for creating and managing chat conversations with Irma, an intelligent assistant that can answer questions about your connected devices.
 
-The single point of truth of how the API is and should be implemented can be found in the `REST-API-spec.yaml` file that has the OpenAPI/Swagger specification. These two files should stay in sync; if they diverge, the specification is authoritative. Consumers (including the Irma CLI) should generate REST clients directly from this specification to avoid drift in request/response contracts.
+The single point of truth for the API contract is the live OpenAPI/Swagger metadata exposed by the running service (default `/swagger/v1/swagger.json`). Keep this document aligned with the implementation by relying on that generated schema; consumers (including the Irma CLI) should generate REST clients directly from the hosted specification to avoid drift in request/response contracts.
 
 ---
 
@@ -73,7 +73,7 @@ In this URL, `<irma-url>` is a placeholder for the actual URL where the Irma bac
 
 ### 1.5 OpenAPI Specification (Swagger)
 
-The Irma Web API provides an interactive way to explore and test its endpoints through an embedded Swagger UI. This user interface is automatically generated from the `REST-API-spec.yaml` OpenAPI specification file.
+The Irma Web API provides an interactive way to explore and test its endpoints through an embedded Swagger UI. This user interface is automatically generated from the runtime OpenAPI description emitted by the service.
 
 **Swagger UI Endpoint:**
 
@@ -165,6 +165,21 @@ curl -X POST https://irma.example.com/v1/irma/conversations/{conversationId}/cha
     "product": "Ixx/1.0"
   }'
 ```
+
+### 2.4 Local Development Database
+
+For local development the API expects a SQL Server–compatible database. Azure SQL is the production target, but you can run a developer instance with Docker:
+
+```bash
+docker run \
+  --name irma-sql \
+  -e 'ACCEPT_EULA=Y' \
+  -e 'SA_PASSWORD=IrmaPassword!123' \
+  -p 1433:1433 \
+  -d mcr.microsoft.com/mssql/server:2022-latest
+```
+
+Update `appsettings.Development.json` if you change credentials or ports. The Web API automatically applies EF Core migrations on startup.
 
 ---
 

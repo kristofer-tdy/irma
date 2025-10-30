@@ -22,7 +22,7 @@ The CLI is intended to be language-agnostic from a user perspective. Everything 
 - Binary name: `irma`.
 - Packaging: Native AOT, self-contained for the targeted OS (no global .NET runtime required).
 - Expected operating systems: Windows, macOS, and Linux (x64/arm64 builds as needed).
-- REST client generation: The Irma Web API publishes `docs/REST-API-spec.yaml`; generate strongly typed clients from this OpenAPI document instead of hand-writing HTTP calls.
+- REST client generation: The Irma Web API exposes live OpenAPI metadata at `/swagger/v1/swagger.json`; generate strongly typed clients from that endpoint instead of hand-writing HTTP calls.
 - Configuration and cache location: `$HOME/.irma/` (Linux/macOS) or `%USERPROFILE%\.irma\` (Windows). This directory stores login tokens (when allowed), default settings, and session metadata.
 
 ## 4. Authentication with Azure Entra ID B2C
@@ -39,6 +39,8 @@ Irma CLI authenticates against the Irma Web API using Azure Entra ID B2C-issued 
   4. Tokens are cached in `${IRMA_HOME}/auth.json`.
 - `irma login --client-id <id> --client-secret <secret> --tenant <tenant>` – client credentials flow for automation. Tokens are stored only in-memory unless `--persist` is explicitly requested.
 - `irma logout` – clears cached tokens.
+
+> **Note:** The current CLI implementation stubs the Azure Entra ID B2C flows and caches a placeholder token. Replace this with real authentication once the identity configuration is finalized.
 
 ### 4.2 Token Management
 
@@ -60,6 +62,7 @@ Irma CLI authenticates against the Irma Web API using Azure Entra ID B2C-issued 
   - `--help`: Show contextual help.
   - `--version`: Print CLI version, Git commit, and target framework.
   - `--json`: Return raw JSON response for commands that normally render formatted output.
+  - `--base-url`: Override the Irma Web API base URL for a single command (otherwise falls back to defaults or `IRMA_BASE_URL`).
   - `--product <id>`: Override the default product identifier for a single command.
 - **Default storage:** `irma defaults set` writes to `${IRMA_HOME}/defaults.json`.
 - **Exit codes:** `0` for success, non-zero for failures. When possible, map HTTP errors to CLI exit codes (e.g., `3` for validation errors, `4` for authentication errors).
@@ -87,7 +90,7 @@ Irma CLI authenticates against the Irma Web API using Azure Entra ID B2C-issued 
 - **Response handling:**
   - `200 OK` → display status, service version, dependency checks.
   - `>= 500` → show error message from API and include `traceId` when available.
-- **Documentation:** See `docs/irma-web-api-doc.md` and `docs/REST-API-spec.yaml` for the complete health payload schema.
+- **Documentation:** See `docs/irma-web-api-doc.md` or query `/swagger/v1/swagger.json` for the complete health payload schema.
 
 ### 6.4 `irma defaults` Subcommands
 
@@ -207,7 +210,7 @@ Defaults are cached client-side to reduce required command-line arguments.
 
 ## 11. REST API Mapping
 
-The Irma backend exposes an OpenAPI/Swagger specification at `docs/REST-API-spec.yaml`. Use this as the source for generating REST API clients (e.g., via `dotnet openapi`, NSwag, Autorest) to keep payload contracts in sync with the server.
+The Irma backend exposes an OpenAPI/Swagger specification at runtime (default `/swagger/v1/swagger.json`). Use this as the source for generating REST API clients (e.g., via `dotnet openapi`, NSwag, Autorest) to keep payload contracts in sync with the server.
 
 | CLI Command | HTTP Method & Path | Notes |
 |-------------|--------------------|-------|

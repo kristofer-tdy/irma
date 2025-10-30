@@ -11,7 +11,7 @@ The goal of Irma is to deliver a seamless and intelligent chat experience, enabl
 To get acquainted with the project, here are a few good places to start:
 
 - **`/docs/irma-web-api-doc.md`**: The primary design and architecture document for the Irma REST API. It provides a comprehensive overview of the endpoints, data models, and architectural decisions.
-- **`/docs/REST-API-spec.yaml`**: The formal OpenAPI (Swagger) specification for the API. You can use this with tools like Swagger UI to interact with the API.
+- The Web API publishes live OpenAPI (Swagger) metadata at runtime (`/swagger/v1/swagger.json`), which can be consumed by Swagger UI or client generators.
 - **`/src`**: The source code for the API and related projects.
 
 We're glad you're here and hope you find Irma interesting. We look forward to your contributions and feedback!

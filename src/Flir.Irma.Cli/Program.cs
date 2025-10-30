@@ -1,2 +1,4 @@
-﻿// See https://aka.ms/new-console-template for more information
-Console.WriteLine("Hello, World!");
+using Flir.Irma.Cli.Runtime;
+
+var app = new IrmaCliApplication();
+return await app.RunAsync(args);
